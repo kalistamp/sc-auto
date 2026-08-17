@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Safe Cycle Studio">
+  <!-- Warm paper tile with the sage cycle mark. Deliberately readable at
+       16px: one thick arc, one arrowhead, nothing else. -->
+  <rect width="64" height="64" rx="14" fill="#f4f1e9"/>
+  <rect x="2" y="2" width="60" height="60" rx="12" fill="none" stroke="#e3ddcf" stroke-width="2"/>
+  <g fill="none" stroke="#2f6f57" stroke-width="6" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M48 30a16 16 0 1 0-4.8 11.4"/>
+  </g>
+  <path d="M50 16v11.5H38.5" fill="none" stroke="#2f6f57" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="32" cy="32" r="4" fill="#a5622b"/>
+</svg>

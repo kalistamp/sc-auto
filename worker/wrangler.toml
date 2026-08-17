@@ -1,0 +1,18 @@
+name = "safecycle-social-studio"
+main = "src/index.js"
+compatibility_date = "2026-08-16"
+workers_dev = true
+
+[vars]
+GIST_ID = "REPLACE_WITH_YOUR_GIST_ID"
+GIST_FILENAME = "sc_data.json"
+OPENAI_MODEL = "gpt-5.6-luna"
+OPENAI_REASONING_EFFORT = "low"
+SESSION_HOURS = "8"
+ALLOWED_ORIGINS = "http://localhost:8000,https://YOUR-GITHUB-USERNAME.github.io"
+
+# Add these as encrypted Worker secrets, never as plain values in this file:
+# APP_PASSKEY
+# SESSION_SECRET
+# GITHUB_TOKEN
+# OPENAI_API_KEY

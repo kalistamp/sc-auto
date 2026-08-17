@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<meta name="description" content="Private drafting, review, and publication record for Safe Cycle Tech social posts.">
+<title>Safe Cycle Studio</title>
+
+<!-- Theme bootstrap. Runs before the stylesheet paints so a dark-mode visitor
+     never gets a white flash. js/theme.js owns the toggle; this is a
+     deliberate duplicate of just enough logic to beat first paint. -->
+<script>
+(function () {
+    try {
+        var saved = localStorage.getItem('sct.theme');       // 'light' | 'dark' | 'system'
+        var dark = saved === 'dark' || ((!saved || saved === 'system') &&
+            window.matchMedia('(prefers-color-scheme: dark)').matches);
+        if (dark) document.documentElement.classList.add('theme-dark');
+    } catch (e) {}
+})();
+</script>
+
+<!-- MODULE VERSIONING — the whole graph, not just the entry point.
+
+     The <script> at the foot of this file carries a build query, which
+     reliably defeats the cache for that ONE file. But app.js then does
+     `import ... from "./data.js"`, and that specifier has no version on it,
+     so the browser is free to answer it out of cache. After a deploy that
+     produces a fresh app.js linked against a stale data.js — and if an
+     export was added or renamed in between, the module graph fails to LINK.
+
+     That failure mode is silent and total: a link error means not one line
+     of app.js runs, so no event listeners are attached, and the passkey
+     gate below renders as static HTML with a dead Unlock button. It has
+     happened once already. It cost an afternoon to diagnose.
+
+     This import map rewrites every module URL to carry the build stamp, so
+     one deploy invalidates the entire graph atomically. Keys are relative
+     so the app still works when served from a subdirectory, which is how
+     GitHub Pages usually serves it.
+
+     Bump these with the other four build stamps; tests/boot.test.mjs fails
+     if this map misses a module in js/ or falls behind BUILD. -->
+<script type="importmap">
+{
+  "imports": {
+    "./js/config.js":    "./js/config.js?v=3.2.1",
+    "./js/data.js":      "./js/data.js?v=3.2.1",
+    "./js/platforms.js": "./js/platforms.js?v=3.2.1",
+    "./js/providers.js": "./js/providers.js?v=3.2.1",
+    "./js/settings.js":  "./js/settings.js?v=3.2.1",
+    "./js/sync.js":      "./js/sync.js?v=3.2.1",
+    "./js/theme.js":     "./js/theme.js?v=3.2.1",
+    "./js/ui.js":        "./js/ui.js?v=3.2.1",
+    "./js/voice.js":     "./js/voice.js?v=3.2.1"
+  }
+}
+</script>
+
+<!-- BOOT WATCHDOG — turns a silent failure into an instruction.
+
+     The import map above prevents the stale-module case going forward, but
+     it cannot help a browser that is ALREADY holding a broken mix, and it
+     does nothing on a browser without import map support. Either way the
+     symptom is the same: the gate renders and the button does nothing,
+     with the real error visible only in the console.
+
+     So: app.js sets this flag as its first act. If it has not been set by
+     the time the timer fires, the modules did not run, and the gate says so
+     in plain language instead of appearing merely broken. Deliberately a
+     classic script, not a module — it has to survive whatever stopped the
+     module graph from loading. -->
+<script>
+window.__sctBooted = false;
+window.addEventListener('DOMContentLoaded', function () {
+    setTimeout(function () {
+        if (window.__sctBooted) return;
+        var msg = document.getElementById('gate-msg');
+        var btn = document.getElementById('gate-btn');
+        if (!msg) return;
+        msg.className = 'gate-msg is-bad';
+        msg.textContent = 'This page loaded an out-of-date copy of itself, so the passkey cannot work yet. Reload bypassing the cache: Ctrl+Shift+R, or Cmd+Shift+R on a Mac.';
+        if (btn) { btn.disabled = true; btn.textContent = 'Reload to continue'; }
+    }, 5000);
+});
+</script>
+
+<link rel="stylesheet" href="styles.css?v=3.2.1">
+<!-- Fonts are self-hosted in assets/fonts and declared in styles.css. No
+     third-party font CDN: a Google Fonts link would hand the IP and
+     referring page of every visitor to another company, which is not what
+     "runs entirely in your browser" should mean. Preloaded because the
+     stylesheet only reveals them one round trip later. -->
+<link rel="preload" href="assets/fonts/inter-latin-var.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="assets/fonts/fraunces-latin-var.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+<link rel="manifest" href="manifest.webmanifest">
+</head>
+<body data-build="3.2.1">
+
+<a class="skip-link" href="#view">Skip to content</a>
+
+<noscript>
+  <p style="padding:2rem;text-align:center">Safe Cycle Studio needs JavaScript. It runs entirely in your browser — no server holds your data.</p>
+</noscript>
+
+<!-- ============================================================
+     ICON SPRITE — inline so there is no icon CDN to wait on, and
+     no flash of un-iconed buttons on a cold load. Every symbol
+     carries geometry only; stroke/fill come from .ico in the CSS.
+     ============================================================ -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+  <symbol id="i-lock" viewBox="0 0 24 24"><path d="M17 10V8a5 5 0 0 0-10 0v2M6 10h12a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1v-9a1 1 0 0 1 1-1Z"/></symbol>
+  <symbol id="i-signout" viewBox="0 0 24 24"><path d="M15 4h3a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1h-3M10 8l-4 4 4 4M6 12h10"/></symbol>
+  <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></symbol>
+  <symbol id="i-moon" viewBox="0 0 24 24"><path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5Z"/></symbol>
+  <symbol id="i-system" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="1.5"/><path d="M8 20h8M12 16v4"/></symbol>
+  <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-1.8-.3 1.6 1.6 0 0 0-1 1.5v.2a2 2 0 1 1-4 0v-.1a1.6 1.6 0 0 0-1-1.5 1.6 1.6 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.6 1.6 0 0 0 .3-1.8 1.6 1.6 0 0 0-1.5-1H2a2 2 0 1 1 0-4h.1a1.6 1.6 0 0 0 1.5-1 1.6 1.6 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.6 1.6 0 0 0 1.8.3H8a1.6 1.6 0 0 0 1-1.5V2a2 2 0 1 1 4 0v.1a1.6 1.6 0 0 0 1 1.5 1.6 1.6 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0-.3 1.8V8a1.6 1.6 0 0 0 1.5 1h.2a2 2 0 1 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1Z"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6"/><path d="m20 20-4.5-4.5"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 13 4 4L19 7"/></symbol>
+  <symbol id="i-check-circle" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="m8 12 2.5 2.5L16 9"/></symbol>
+  <symbol id="i-alert" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7.5v5.5M12 16.3v.4"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></symbol>
+  <symbol id="i-copy" viewBox="0 0 24 24"><path d="M9 9h9a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H9a1 1 0 0 1-1-1v-9a1 1 0 0 1 1-1Z"/><path d="M5 15V5a1 1 0 0 1 1-1h10"/></symbol>
+  <symbol id="i-external" viewBox="0 0 24 24"><path d="M14 4h6v6M20 4l-8.5 8.5M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></symbol>
+  <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2M6 7l1 13a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-13M10 11v6M14 11v6"/></symbol>
+  <symbol id="i-archive" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="4" rx="1"/><path d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8M10 12h4"/></symbol>
+  <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 11A8 8 0 0 0 6.3 6.3L4 8.5M4 5v3.5H7.5"/><path d="M4 13a8 8 0 0 0 13.7 4.7L20 15.5M20 19v-3.5h-3.5"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5.5l3.5 2"/></symbol>
+  <symbol id="i-calendar" viewBox="0 0 24 24"><rect x="3.5" y="5" width="17" height="15" rx="1.5"/><path d="M3.5 10h17M8 3.5v3M16 3.5v3"/></symbol>
+  <symbol id="i-spark" viewBox="0 0 24 24"><path d="M12 3.5 13.9 9l5.6 1.9-5.6 1.9L12 18.4l-1.9-5.6L4.5 11 10.1 9 12 3.5Z"/><path d="M18.5 3.5v3M20 5h-3"/></symbol>
+  <symbol id="i-menu" viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></symbol>
+  <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 4v11m0 0 4-4m-4 4-4-4M5 19h14"/></symbol>
+  <symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 19V8m0 0 4 4m-4-4-4 4M5 5h14"/></symbol>
+  <symbol id="i-undo" viewBox="0 0 24 24"><path d="M4 9h11a5 5 0 0 1 0 10h-6M4 9l4-4M4 9l4 4"/></symbol>
+  <symbol id="i-cloud" viewBox="0 0 24 24"><path d="M17.5 19H7a4 4 0 0 1-.6-8 6 6 0 0 1 11.4 1.2A3.5 3.5 0 0 1 17.5 19Z"/></symbol>
+  <symbol id="i-cloud-off" viewBox="0 0 24 24"><path d="M17.5 18H7a4 4 0 0 1-.6-8A6 6 0 0 1 16 6.6M3 3l18 18"/></symbol>
+  <symbol id="i-home" viewBox="0 0 24 24"><path d="M4 10.5 12 4l8 6.5V19a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-8.5Z"/><path d="M9.5 20v-6h5v6"/></symbol>
+  <symbol id="i-library" viewBox="0 0 24 24"><path d="M5 4h4v16H5zM11 4h4v16h-4z"/><path d="m17.5 5.2 3 15"/></symbol>
+  <symbol id="i-activity" viewBox="0 0 24 24"><path d="M3 12h4l3-7 4 14 3-7h4"/></symbol>
+  <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5.5M12 7.6v.4"/></symbol>
+  <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3.5 19 6v5.5c0 4.2-2.8 7.6-7 9-4.2-1.4-7-4.8-7-9V6l7-2.5Z"/><path d="m9 12 2 2 4-4"/></symbol>
+  <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m7 10 5 5 5-5"/></symbol>
+  <symbol id="i-arrow-right" viewBox="0 0 24 24"><path d="M4 12h15m0 0-5-5m5 5-5 5"/></symbol>
+  <symbol id="i-pencil" viewBox="0 0 24 24"><path d="M4 20h4L19 9a2.1 2.1 0 0 0-3-3L5 17v3Z"/><path d="m14.5 7.5 3 3"/></symbol>
+  <symbol id="i-link" viewBox="0 0 24 24"><path d="M10.5 13.5a4 4 0 0 0 5.7 0l2.3-2.3a4 4 0 1 0-5.7-5.7L11.6 6.7"/><path d="M13.5 10.5a4 4 0 0 0-5.7 0l-2.3 2.3a4 4 0 1 0 5.7 5.7l1.2-1.2"/></symbol>
+  <symbol id="i-history" viewBox="0 0 24 24"><path d="M3.5 12a8.5 8.5 0 1 0 2.6-6.1M3.5 4.5V9H8"/><path d="M12 7.5V12l3 1.8"/></symbol>
+  <symbol id="i-list" viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h10"/></symbol>
+  <symbol id="i-grid" viewBox="0 0 24 24"><rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="7" rx="1.5"/><rect x="4" y="13" width="7" height="7" rx="1.5"/><rect x="13" y="13" width="7" height="7" rx="1.5"/></symbol>
+  <symbol id="i-inbox" viewBox="0 0 24 24"><path d="M4 13h4l1.5 3h5L16 13h4"/><path d="M6.2 4.5h11.6l2.2 8.2V19a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-6.3L6.2 4.5Z"/></symbol>
+  <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2.5 12S6 6 12 6s9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z"/><circle cx="12" cy="12" r="2.7"/></symbol>
+</defs></svg>
+
+<!-- ============================================================
+     PASSKEY GATE
+     A privacy latch, not a security boundary — this site is public
+     files. What actually protects the workspace is the GitHub token
+     entered per device, which never leaves that browser.
+     ============================================================ -->
+<div id="gate" class="gate">
+  <div class="gate-card" id="gate-card">
+    <div class="gate-mark" aria-hidden="true"><svg class="ico"><use href="#i-lock"></use></svg></div>
+    <h1>Safe Cycle <em>Studio</em></h1>
+    <p class="gate-sub">Draft, review, and record every post.</p>
+
+    <form id="gate-form" autocomplete="off">
+      <label class="sr-only" for="passkey">Passkey</label>
+      <input type="password" id="passkey" placeholder="Passkey" autocomplete="current-password" spellcheck="false" autofocus>
+      <button type="submit" class="btn btn-primary btn-block" id="gate-btn">Unlock</button>
+    </form>
+    <p id="gate-msg" class="gate-msg" role="status" aria-live="polite"></p>
+  </div>
+  <p class="gate-foot">Safe Cycle Tech · content operations</p>
+</div>
+
+<!-- ============================================================
+     APP SHELL
+     The chrome is static HTML and only #view is re-rendered. That is
+     what keeps a caret, a scroll position, and a text selection alive
+     while the workspace saves in the background.
+     ============================================================ -->
+<div id="app" class="app" hidden>
+
+  <aside class="sidebar" id="sidebar" aria-label="Workspace sections">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true"><svg class="ico"><use href="#i-refresh"></use></svg></span>
+      <span class="brand-name">Safe Cycle <em>Studio</em><small>Content operations</small></span>
+    </div>
+
+    <nav class="nav" aria-label="Primary">
+      <button class="nav-btn" type="button" data-nav="overview"><svg class="ico"><use href="#i-home"></use></svg><span>Overview</span></button>
+      <button class="nav-btn" type="button" data-nav="compose"><svg class="ico"><use href="#i-spark"></use></svg><span>New draft</span></button>
+      <button class="nav-btn" type="button" data-nav="library"><svg class="ico"><use href="#i-library"></use></svg><span>Library</span><span class="nav-count" id="count-library"></span></button>
+      <button class="nav-btn" type="button" data-nav="queue"><svg class="ico"><use href="#i-calendar"></use></svg><span>Queue</span><span class="nav-count" id="count-queue"></span></button>
+      <button class="nav-btn" type="button" data-nav="runs"><svg class="ico"><use href="#i-activity"></use></svg><span>Model runs</span></button>
+      <button class="nav-btn" type="button" data-nav="settings"><svg class="ico"><use href="#i-gear"></use></svg><span>Settings</span></button>
+    </nav>
+
+    <span class="spacer"></span>
+
+    <div class="side-foot">
+      <button class="side-stat" type="button" id="side-sync" data-act="sync-settings">
+        <span class="side-stat-label">Workspace</span>
+        <strong id="side-mode"><i class="dot"></i><span>This device</span></strong>
+        <small id="side-stamp">not connected</small>
+      </button>
+      <button class="side-stat" type="button" id="side-model" data-act="sync-settings">
+        <span class="side-stat-label">Drafting model</span>
+        <strong id="side-model-name">Not configured</strong>
+        <small id="side-model-provider">Add a key to generate</small>
+      </button>
+    </div>
+  </aside>
+
+  <div class="workspace">
+    <header class="topbar">
+      <button class="icon-btn only-narrow" type="button" id="menu-btn" aria-label="Open sections" aria-expanded="false">
+        <svg class="ico"><use href="#i-menu"></use></svg>
+      </button>
+
+      <div class="topbar-title">
+        <h1 id="view-title">Overview</h1>
+        <p id="view-sub">Everything waiting on you</p>
+      </div>
+
+      <span class="spacer"></span>
+
+      <button id="sync-pill" class="sync-pill" type="button" title="Sync now">
+        <svg class="ico"><use href="#i-check"></use></svg>
+        <span id="sync-text">Saved</span>
+      </button>
+
+      <button class="icon-btn" type="button" id="theme-btn" title="Theme" aria-label="Change theme">
+        <svg class="ico ico-sun"><use href="#i-sun"></use></svg>
+        <svg class="ico ico-moon"><use href="#i-moon"></use></svg>
+      </button>
+
+      <button class="icon-btn" type="button" data-act="sync-settings" title="Cloud sync settings" aria-label="Cloud sync settings">
+        <svg class="ico"><use href="#i-gear"></use></svg>
+      </button>
+
+      <button class="icon-btn" type="button" id="lock-btn" title="Lock studio" aria-label="Lock studio">
+        <svg class="ico"><use href="#i-signout"></use></svg>
+      </button>
+
+      <!-- The one primary action, present on every view. The label drops
+           on a narrow screen and the icon carries it. -->
+      <button class="btn btn-primary" type="button" data-nav="compose" title="New draft">
+        <svg class="ico"><use href="#i-plus"></use></svg><span class="only-wide">New draft</span>
+      </button>
+    </header>
+
+    <div id="banner" class="banner" hidden>
+      <svg class="ico"><use href="#i-alert"></use></svg>
+      <span id="banner-text"></span>
+      <button id="banner-action" class="btn btn-ghost btn-sm" type="button" hidden></button>
+      <button id="banner-close" class="banner-x" type="button" aria-label="Dismiss"><svg class="ico"><use href="#i-x"></use></svg></button>
+    </div>
+
+    <main id="view" class="view" tabindex="-1"></main>
+  </div>
+</div>
+
+<div id="scrim" class="scrim" hidden></div>
+
+<!-- Generic modal. Content is written per use; the shell, focus trap and
+     Esc handling are the browser's, which is why this is a <dialog>. -->
+<dialog id="modal" class="modal"></dialog>
+<dialog id="confirm" class="modal modal-sm"></dialog>
+
+<div id="toast" class="toast" hidden role="status" aria-live="polite">
+  <span id="toast-text"></span>
+  <button id="toast-action" class="toast-action" type="button" hidden></button>
+</div>
+
+<script type="module" src="js/app.js?v=3.2.1"></script>
+</body>
+</html>

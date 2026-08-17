@@ -1,0 +1,19 @@
+{
+  "name": "Safe Cycle Studio",
+  "short_name": "SC Studio",
+  "description": "Private drafting, review, and publication record for Safe Cycle Tech social posts.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#f4f1e9",
+  "theme_color": "#f4f1e9",
+  "icons": [
+    {
+      "src": "assets/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

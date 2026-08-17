@@ -1,0 +1,425 @@
+/* ============================================================
+   SAFE CYCLE STUDIO — frontier model gateway
+
+   Three provider adapters behind one call. Each returns the same
+   normalized draft package plus a RECEIPT: provider, the model that
+   was asked for, the model that actually answered, prompt version,
+   response id, token usage, and latency.
+
+   The receipt is the point. "Which model wrote this" should be a
+   recorded fact, not a label typed into a settings box — a provider
+   can resolve a family alias to a dated snapshot, or serve a different
+   model than the one requested, and the record has to show that
+   rather than repeat what was asked for.
+
+   Calls go straight from the browser. That is a deliberate trade: this
+   project has no server, so the keys live in your browser instead of
+   in a backend you would have to run. The unused worker/ directory is
+   there if that trade ever stops being the right one.
+   ============================================================ */
+
+import { getPlatform } from "./data.js";
+import { PROVIDERS } from "./settings.js";
+import { exemplarSection, voiceRules } from "./voice.js";
+
+/* Bump when the instructions or output contract change, so an old post's
+   receipt still says which prompt produced it.
+
+   CHANGE (2026-08): sct-social-4 → sct-social-5
+   Reason: voiceRules() was substantially rewritten (positive human-habits
+   first, expanded lexicon, new constructions/openers, smoothness check).
+   Old receipts must continue to report the prompt that actually produced
+   them; new generations get the new version string. */
+export const PROMPT_VERSION = "sct-social-5";
+
+export class ProviderError extends Error {
+  constructor(message, { status = 0, hint = "" } = {}) {
+    super(message);
+    this.name = "ProviderError";
+    this.status = status;
+    this.hint = hint;
+  }
+}
+
+/* ------------------------------------------------------------
+   PUBLIC ENTRY POINT
+   ------------------------------------------------------------ */
+
+export async function generateDrafts({ credentials, brief, organization, recentPosts = [], signal }) {
+  const provider = credentials.provider;
+  const meta = PROVIDERS[provider];
+  if (!meta) throw new ProviderError(`Unknown provider: ${provider}.`);
+
+  const apiKey = credentials.keys?.[provider] || "";
+  if (!apiKey) {
+    throw new ProviderError(`No ${meta.label} API key on this device.`, {
+      hint: "Open Cloud sync and paste a key. Keys are stored in this browser only."
+    });
+  }
+
+  const requestedModel = (credentials.models?.[provider] || meta.defaultModel).trim();
+  if (!requestedModel) throw new ProviderError(`Choose a ${meta.label} model in Cloud sync.`);
+
+  const instructions = buildInstructions(organization, brief, recentPosts);
+  const input = JSON.stringify({
+    brief: {
+      campaign: brief.campaign,
+      objective: brief.objective,
+      audience: brief.audience,
+      keyMessage: brief.keyMessage,
+      callToAction: brief.cta,
+      tone: brief.tone,
+      platforms: brief.platforms,
+      mustInclude: brief.mustInclude || ""
+    },
+    /* Recent copy goes in so the model can deliberately vary its
+       phrasing instead of rewriting last week's post. */
+    recentlyPublished: recentPosts.slice(0, 12).map((post) => ({
+      campaign: post.campaign,
+      copy: (post.canonical || "").slice(0, 400)
+    }))
+  });
+
+  const schema = generationSchema(brief.platforms);
+  const started = performance.now();
+
+  let raw;
+  if (provider === "anthropic") raw = await callAnthropic({ apiKey, model: requestedModel, instructions, input, schema, effort: credentials.effort, signal });
+  else if (provider === "openai") raw = await callOpenAI({ apiKey, model: requestedModel, instructions, input, schema, signal });
+  else raw = await callGemini({ apiKey, model: requestedModel, instructions, input, schema, signal });
+
+  return {
+    generation: cleanGeneration(raw.generation, brief.platforms),
+    receipt: {
+      provider,
+      providerLabel: meta.label,
+      requestedModel,
+      /* Fall back to the requested id only when the provider genuinely
+         told us nothing — never invent agreement. */
+      servedModel: raw.servedModel || "",
+      promptVersion: PROMPT_VERSION,
+      responseId: raw.responseId || "",
+      usage: raw.usage || null,
+      latencyMs: Math.round(performance.now() - started),
+      at: new Date().toISOString()
+    }
+  };
+}
+
+/* True when the model that answered is the model that was asked for.
+   An empty servedModel means the provider did not say, which is a third
+   state — "unverified" — and must not be reported as a match. */
+export function receiptState(ai) {
+  if (!ai || ai.provider === "none") return "manual";
+  if (!ai.servedModel) return "unknown";
+  return modelsMatch(ai.requestedModel, ai.servedModel) ? "ok" : "swapped";
+}
+
+/* Providers routinely resolve a family alias to a dated snapshot
+   (`claude-opus-5` → `claude-opus-5-20260317`). That is the same model,
+   not a substitution, so treat a shared prefix as a match. */
+export function modelsMatch(requested, served) {
+  const a = String(requested || "").toLowerCase();
+  const b = String(served || "").toLowerCase();
+  if (!a || !b) return false;
+  return a === b || b.startsWith(a) || a.startsWith(b);
+}
+
+/* ------------------------------------------------------------
+   ADAPTERS
+   ------------------------------------------------------------ */
+
+async function callAnthropic({ apiKey, model, instructions, input, schema, effort, signal }) {
+  const body = {
+    model,
+    /* Generous, because on current Claude models max_tokens caps
+       thinking and response text together — a tight budget truncates
+       the JSON mid-object and the parse fails for no visible reason. */
+    max_tokens: 16000,
+    system: instructions,
+    messages: [{ role: "user", content: input }],
+    output_config: { format: { type: "json_schema", schema } }
+  };
+  /* Only sent when explicitly chosen: `effort` is rejected by older
+     models, and the default (high) works everywhere. */
+  if (effort) body.output_config.effort = effort;
+
+  const payload = await request("https://api.anthropic.com/v1/messages", {
+    headers: {
+      "x-api-key": apiKey,
+      "anthropic-version": "2023-06-01",
+      "anthropic-dangerous-direct-browser-access": "true"
+    },
+    body, signal
+  });
+
+  if (payload.stop_reason === "refusal") {
+    throw new ProviderError("The model declined this request.", {
+      hint: payload.stop_details?.explanation || "Rephrase the brief and try again."
+    });
+  }
+  if (payload.stop_reason === "max_tokens") {
+    throw new ProviderError("The reply was cut off before the drafts were complete.", {
+      hint: "Shorten the brief, or lower the reasoning effort in Cloud sync."
+    });
+  }
+
+  const text = (payload.content || []).filter((block) => block.type === "text").map((block) => block.text).join("");
+  return {
+    generation: parseGeneration(text),
+    servedModel: payload.model || "",
+    responseId: payload.id || "",
+    usage: normalizeUsage(payload.usage?.input_tokens, payload.usage?.output_tokens)
+  };
+}
+
+async function callOpenAI({ apiKey, model, instructions, input, schema, signal }) {
+  const payload = await request("https://api.openai.com/v1/responses", {
+    headers: { Authorization: `Bearer ${apiKey}` },
+    body: {
+      model, instructions, input,
+      text: { format: { type: "json_schema", name: "social_post_package", strict: true, schema } },
+      store: false
+    },
+    signal
+  });
+
+  const text = payload.output_text
+    || (payload.output || [])
+      .flatMap((item) => item.content || [])
+      .filter((part) => part.type === "output_text")
+      .map((part) => part.text)
+      .join("");
+
+  return {
+    generation: parseGeneration(text),
+    servedModel: payload.model || "",
+    responseId: payload.id || "",
+    usage: normalizeUsage(payload.usage?.input_tokens, payload.usage?.output_tokens)
+  };
+}
+
+async function callGemini({ apiKey, model, instructions, input, schema, signal }) {
+  const payload = await request(
+    `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
+    {
+      headers: { "x-goog-api-key": apiKey },
+      body: {
+        system_instruction: { parts: [{ text: instructions }] },
+        contents: [{ role: "user", parts: [{ text: input }] }],
+        /* Gemini's schema dialect is an OpenAPI subset that does not
+           accept `additionalProperties`, so it gets its own copy. */
+        generationConfig: { responseMimeType: "application/json", responseSchema: stripUnsupported(schema) }
+      },
+      signal
+    }
+  );
+
+  const text = (payload.candidates?.[0]?.content?.parts || []).map((part) => part.text || "").join("");
+  const usage = payload.usageMetadata;
+  return {
+    generation: parseGeneration(text),
+    servedModel: payload.modelVersion || "",
+    responseId: payload.responseId || "",
+    usage: normalizeUsage(usage?.promptTokenCount, usage?.candidatesTokenCount)
+  };
+}
+
+/* ------------------------------------------------------------
+   TRANSPORT
+   ------------------------------------------------------------ */
+
+async function request(url, { headers, body, signal }) {
+  let response;
+  try {
+    response = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...headers },
+      body: JSON.stringify(body),
+      signal
+    });
+  } catch (error) {
+    if (error?.name === "AbortError") throw error;
+    /* A cross-origin block and an offline machine look identical from
+       here, so say both rather than guess. */
+    throw new ProviderError("Could not reach the model provider.", {
+      hint: isOffline()
+        ? "This device appears to be offline."
+        : "The browser may be blocking the cross-origin request, or the key's project may not allow browser calls."
+    });
+  }
+
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const detail = payload.error?.message || payload.error?.status || payload.message || "";
+    throw new ProviderError(describeStatus(response.status, detail), { status: response.status, hint: detail });
+  }
+  return payload;
+}
+
+/* `navigator` is not guaranteed to exist outside a browser (older Node,
+   some embedded webviews), and this file is unit tested. */
+function isOffline() {
+  return globalThis.navigator?.onLine === false;
+}
+
+function describeStatus(status, detail) {
+  if (status === 401) return "The provider rejected that API key.";
+  if (status === 403) return "That key is not allowed to use this model.";
+  if (status === 404) return "That model id was not found on this account.";
+  if (status === 429) return "Rate limited or out of quota. Wait a moment and try again.";
+  if (status >= 500) return "The provider is having trouble right now.";
+  return detail ? `The provider refused the request: ${detail}` : `The provider returned ${status}.`;
+}
+
+function normalizeUsage(input, output) {
+  const inTok = Number(input || 0);
+  const outTok = Number(output || 0);
+  if (!inTok && !outTok) return null;
+  return { input: inTok, output: outTok, total: inTok + outTok };
+}
+
+/* ------------------------------------------------------------
+   PROMPT AND OUTPUT CONTRACT
+   ------------------------------------------------------------ */
+
+function buildInstructions(organization, brief, recentPosts = []) {
+  const facts = (organization.facts || []).map((fact) => `- ${fact}`).join("\n");
+  const rules = (organization.prohibitedClaims || []).map((rule) => `- ${rule}`).join("\n");
+  /* The key is what the model must echo back in `platform`, so it leads;
+     the label is there because "default" means nothing to a reader and
+     "Any platform" explains itself. Custom platforms the operator added
+     arrive here exactly like the built-in ones. */
+  const perPlatform = brief.platforms
+    .map((key) => {
+      const platform = getPlatform(key);
+      const guidance = brief.guidance?.[key] || platform.guidance || "Write it the way that platform's readers expect.";
+      const limit = platform.soft ? ` Aim for roughly ${platform.soft} characters or fewer.` : "";
+      const title = platform.titleMax ? ` Needs a title of up to ${platform.titleMax} characters.` : "";
+      return `- ${key} (${platform.label}): ${guidance}${limit}${title}`;
+    })
+    .join("\n");
+
+  /* Real published posts first, then the rules. Showing the model what
+     this organization sounds like moves output further than any list of
+     forbidden words; the rules exist to stop drift away from the
+     examples, not to substitute for them. */
+  const exemplars = exemplarSection(recentPosts, brief.platforms?.[0] || "");
+
+  return `You write social posts for ${organization.name || "a small nonprofit"}. Produce one canonical message and one distinct draft per platform.
+
+Organization
+Mission: ${organization.mission || ""}
+Service area: ${organization.serviceArea || ""}
+Voice: ${organization.voice || "Neighborly, practical, and specific."}
+Requested tone for this piece: ${brief.tone || "Neighborly and direct"}
+
+Facts you may state
+${facts || "- (none recorded)"}
+
+Rules
+${rules || "- (none recorded)"}
+- Every factual claim must come from the list above or from the brief. Nothing else.
+- Never invent statistics, partnerships, events, certifications, testimonials, or details about a person.
+- Write for a reader who has never heard of this organization.
+
+Platforms
+${perPlatform}
+${exemplars ? `\n${exemplars}\n` : ""}
+${voiceRules()}
+
+Return only the requested JSON structure. Put anything the operator should check before publishing in "warnings".`;
+}
+
+function generationSchema(platforms) {
+  return {
+    type: "object",
+    additionalProperties: false,
+    required: ["campaignAngle", "canonical", "variants", "warnings"],
+    properties: {
+      campaignAngle: { type: "string", description: "One sentence naming the angle taken." },
+      canonical: { type: "string", description: "The shared message, platform-neutral." },
+      warnings: {
+        type: "array",
+        description: "Anything the operator should verify before publishing.",
+        items: { type: "string" }
+      },
+      variants: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          required: ["platform", "title", "body", "hashtags", "notes"],
+          properties: {
+            platform: { type: "string", enum: platforms },
+            title: { type: "string", description: "Only Reddit uses this; empty string elsewhere." },
+            body: { type: "string" },
+            hashtags: { type: "array", items: { type: "string" } },
+            notes: { type: "string", description: "A note to the operator, not part of the post." }
+          }
+        }
+      }
+    }
+  };
+}
+
+/* Gemini's dialect rejects keys it does not know. Rather than maintain
+   two hand-written schemas that can drift, derive its copy from the one
+   above. */
+function stripUnsupported(node) {
+  if (Array.isArray(node)) return node.map(stripUnsupported);
+  if (!node || typeof node !== "object") return node;
+  const out = {};
+  for (const [key, value] of Object.entries(node)) {
+    if (key === "additionalProperties") continue;
+    out[key] = stripUnsupported(value);
+  }
+  return out;
+}
+
+function parseGeneration(text) {
+  if (!text || !text.trim()) throw new ProviderError("The model returned an empty reply.");
+  /* Some models wrap JSON in a markdown fence even under a schema
+     constraint. Strip it rather than fail on a formatting habit. */
+  const cleaned = text.trim().replace(/^```(?:json)?\s*/i, "").replace(/```$/, "").trim();
+  try {
+    return JSON.parse(cleaned);
+  } catch {
+    throw new ProviderError("The model's reply was not valid structured draft data.", {
+      hint: "This usually means the model does not support structured output. Try a different model id."
+    });
+  }
+}
+
+function cleanGeneration(generation, platforms) {
+  if (!generation || !Array.isArray(generation.variants)) {
+    throw new ProviderError("The model's reply was missing the platform drafts.");
+  }
+  /* Reorder to match what was requested, and drop anything extra, so
+     the editor's cards always appear in the operator's chosen order. */
+  const variants = platforms
+    .map((platform) => generation.variants.find((variant) => variant.platform === platform))
+    .filter(Boolean);
+
+  const missing = platforms.filter((platform) => !variants.some((variant) => variant.platform === platform));
+  if (missing.length) {
+    throw new ProviderError(`The model skipped ${missing.join(", ")}.`, {
+      hint: "Try again, or generate fewer platforms at once."
+    });
+  }
+
+  return {
+    campaignAngle: String(generation.campaignAngle || "").trim(),
+    canonical: String(generation.canonical || "").trim(),
+    warnings: Array.isArray(generation.warnings) ? generation.warnings.map(String).filter(Boolean) : [],
+    variants: variants.map((variant) => ({
+      platform: variant.platform,
+      title: String(variant.title || "").trim(),
+      body: String(variant.body || "").trim(),
+      hashtags: Array.isArray(variant.hashtags)
+        ? variant.hashtags.map((tag) => String(tag).replace(/^#/, "").trim()).filter(Boolean)
+        : [],
+      notes: String(variant.notes || "").trim()
+    }))
+  };
+}

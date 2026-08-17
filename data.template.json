@@ -1,0 +1,102 @@
+{
+  "schemaVersion": 3,
+  "revision": 0,
+  "createdAt": "2026-01-01T00:00:00.000Z",
+  "updatedAt": "2026-01-01T00:00:00.000Z",
+  "organization": {
+    "name": "Safe Cycle Tech",
+    "website": "https://safecycletech.com/",
+    "serviceArea": "Bay Area, California",
+    "mission": "Collect unwanted electronics, refurbish what can be saved for local students and families, and responsibly recycle the rest.",
+    "voice": "Neighborly, practical, trustworthy, specific, and never pushy.",
+    "defaultCta": "Call or text (415) 612-8520 to schedule a free pickup.",
+    "facts": [
+      "Pickup is free across the Bay Area.",
+      "Working devices are refurbished for local students and underprivileged families.",
+      "Drives are wiped to NIST 800-88 standards or physically destroyed when wiping is not possible.",
+      "Equipment that cannot be refurbished goes to certified California electronics recyclers.",
+      "Safe Cycle Tech accepts broken phones, laptops, desktop computers, tablets, monitors, DVRs, game consoles, routers, cables, and most other electronics."
+    ],
+    "prohibitedClaims": [
+      "Do not invent impact numbers, partnerships, certifications, testimonials, or recipient stories.",
+      "Do not identify students, families, or donors without explicit written permission.",
+      "Do not claim every donated device is refurbished; unusable equipment is responsibly recycled.",
+      "Do not promise a pickup window, price, or tax outcome that has not been confirmed."
+    ]
+  },
+  "platforms": [
+    {
+      "key": "default",
+      "label": "Any platform",
+      "color": "#7d8279",
+      "homeUrl": "",
+      "titleMax": 0,
+      "bodyMax": 2200,
+      "soft": 800,
+      "blurb": "One draft, usable anywhere",
+      "note": "Platform-neutral copy. Paste it into whatever you are posting to.",
+      "guidance": "Platform-neutral. Assume nothing about the audience or the interface: no hashtags unless they read naturally in a sentence, no references to features only one network has, no 'link in bio'.",
+      "enabled": true,
+      "account": ""
+    },
+    {
+      "key": "reddit",
+      "label": "Reddit",
+      "color": "#d93a00",
+      "homeUrl": "https://www.reddit.com/",
+      "titleMax": 300,
+      "bodyMax": 40000,
+      "soft": 2500,
+      "blurb": "Title plus community copy",
+      "note": "Check the subreddit's self-promotion and flair rules before posting.",
+      "guidance": "Community-first, specific, transparent, and adapted to each subreddit's rules.",
+      "enabled": true,
+      "account": ""
+    },
+    {
+      "key": "facebook",
+      "label": "Facebook",
+      "color": "#1877f2",
+      "homeUrl": "https://www.facebook.com/",
+      "titleMax": 0,
+      "bodyMax": 63206,
+      "soft": 900,
+      "blurb": "Page post",
+      "note": "Post from the Page or Meta Business Suite, not a personal profile.",
+      "guidance": "Warm and informative with a clear local call to action.",
+      "enabled": true,
+      "account": ""
+    },
+    {
+      "key": "nextdoor",
+      "label": "Nextdoor",
+      "color": "#5a9c22",
+      "homeUrl": "https://nextdoor.com/",
+      "titleMax": 0,
+      "bodyMax": 8192,
+      "soft": 1200,
+      "blurb": "Neighborhood post",
+      "note": "Neighbors downvote anything that reads like an advertisement.",
+      "guidance": "Neighborly, locally relevant, concise, and trust-building.",
+      "enabled": true,
+      "account": ""
+    },
+    {
+      "key": "instagram",
+      "label": "Instagram",
+      "color": "#c13584",
+      "homeUrl": "https://www.instagram.com/",
+      "titleMax": 0,
+      "bodyMax": 2200,
+      "soft": 1500,
+      "blurb": "Caption for an image post",
+      "note": "Instagram needs an image; the caption is what this drafts.",
+      "guidance": "Short, concrete, and written to sit under a real photo.",
+      "enabled": false,
+      "account": ""
+    }
+  ],
+  "posts": [],
+  "runs": [],
+  "activity": []
+}
