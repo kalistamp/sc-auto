@@ -18,6 +18,7 @@
    ============================================================ */
 
 const CRED_KEY = "sct.credentials.v1";
+const MODELS_KEY = "sct.models.v1";
 const PREF_KEY = "sct.prefs.v1";
 const LOCAL_DATA_KEY = "sct.workspace.v2";
 const UNLOCK_KEY = "sct.unlocked";
@@ -94,6 +95,64 @@ export function writeCredentials(next) {
 
 export function clearCredentials() {
   try { localStorage.removeItem(CRED_KEY); } catch { /* nothing to do */ }
+  clearModelCatalogs();
+}
+
+/* ---------- model catalogs ------------------------------------------
+
+   What each provider answered when it was last asked which models the
+   entered key can use. Cached so reopening Cloud sync shows a populated
+   picker instead of an empty one waiting on a network round trip.
+
+   Cached against the key's FINGERPRINT, never the key itself. A model
+   list belongs to a key, not to a provider — a different key can be a
+   different project with different model access — so pasting a new key
+   has to invalidate the list rather than leave the picker confidently
+   describing the old one.
+   ------------------------------------------------------------------- */
+
+/* Enough for any provider's full list several times over. A ceiling only
+   because localStorage is a shared ~5 MB budget with the workspace, and
+   losing a post to a cache of model names would be an absurd trade. */
+const MODEL_CACHE_LIMIT = 300;
+
+function readCatalogs() {
+  try {
+    const raw = localStorage.getItem(MODELS_KEY);
+    const parsed = raw ? JSON.parse(raw) : null;
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch { return {}; }
+}
+
+export function readModelCatalog(provider, apiKey) {
+  const entry = readCatalogs()[provider];
+  if (!entry || !Array.isArray(entry.models) || !entry.models.length) return null;
+  if (entry.keyPrint !== fingerprint(String(apiKey || "").trim())) return null;
+  return {
+    models: entry.models
+      .filter((model) => model && typeof model.id === "string" && model.id)
+      .map((model) => ({ id: model.id, label: String(model.label || model.id) })),
+    fetchedAt: String(entry.fetchedAt || "")
+  };
+}
+
+export function writeModelCatalog(provider, { models = [], apiKey = "", fetchedAt = "" } = {}) {
+  if (!PROVIDERS[provider]) return null;
+  const all = readCatalogs();
+  all[provider] = {
+    keyPrint: fingerprint(String(apiKey || "").trim()),
+    fetchedAt: fetchedAt || new Date().toISOString(),
+    models: models.slice(0, MODEL_CACHE_LIMIT).map((model) => ({
+      id: String(model.id || ""),
+      label: String(model.label || model.id || "")
+    })).filter((model) => model.id)
+  };
+  write(MODELS_KEY, all);
+  return readModelCatalog(provider, apiKey);
+}
+
+export function clearModelCatalogs() {
+  try { localStorage.removeItem(MODELS_KEY); } catch { /* nothing to do */ }
 }
 
 /* People paste the whole gist URL about as often as the bare id. */

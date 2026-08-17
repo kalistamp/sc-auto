@@ -1,10 +1,15 @@
 /* ============================================================
    SAFE CYCLE STUDIO — frontier model gateway
 
-   Three provider adapters behind one call. Each returns the same
-   normalized draft package plus a RECEIPT: provider, the model that
-   was asked for, the model that actually answered, prompt version,
-   response id, token usage, and latency.
+   Three provider adapters behind one call, plus a fourth job on the
+   side: asking each provider which models the entered key can actually
+   use, so the model picker in Cloud sync is a list the provider gave us
+   rather than a list this file was written believing.
+
+   Each generation returns the same normalized draft package plus a
+   RECEIPT: provider, the model that was asked for, the model that
+   actually answered, prompt version, response id, token usage, and
+   latency.
 
    The receipt is the point. "Which model wrote this" should be a
    recorded fact, not a label typed into a settings box — a provider
@@ -226,16 +231,163 @@ async function callGemini({ apiKey, model, instructions, input, schema, signal }
 }
 
 /* ------------------------------------------------------------
+   MODEL DISCOVERY
+
+   Every provider publishes what a key may use, and that answer is the
+   only trustworthy one: model access is a property of the key's account
+   and project, it changes without warning, and a list maintained here
+   would start rotting the day it was written.
+
+   Listing also authenticates. A 200 from any of these three endpoints
+   means the key reached the provider and was accepted, which is exactly
+   what "test this key" has to establish — and it establishes it without
+   spending a single token on a throwaway generation.
+   ------------------------------------------------------------ */
+
+/* Pages, not models. Each request already asks for the maximum page size,
+   so this only exists so a provider that keeps handing back a cursor
+   cannot spin here forever. */
+const LIST_PAGE_CAP = 5;
+
+export async function listModels({ provider, apiKey, signal }) {
+  const meta = PROVIDERS[provider];
+  if (!meta) throw new ProviderError(`Unknown provider: ${provider}.`);
+
+  const key = String(apiKey || "").trim();
+  if (!key) {
+    throw new ProviderError(`Enter a ${meta.label} API key first.`, {
+      hint: "The model list comes from the provider, so there has to be a key to ask with."
+    });
+  }
+
+  let models;
+  if (provider === "anthropic") models = await anthropicModels(key, signal);
+  else if (provider === "openai") models = await openaiModels(key, signal);
+  else models = await geminiModels(key, signal);
+
+  models = dedupeModels(models);
+  if (!models.length) {
+    throw new ProviderError(`${meta.label} accepted the key but listed no usable models.`, {
+      hint: "The key may belong to a project with no text model access enabled yet."
+    });
+  }
+  return { provider, models, fetchedAt: new Date().toISOString() };
+}
+
+/* Anthropic returns newest first and every entry is a text model, so the
+   order it gives is the order to show. */
+async function anthropicModels(apiKey, signal) {
+  const out = [];
+  let afterId = "";
+
+  for (let page = 0; page < LIST_PAGE_CAP; page += 1) {
+    const url = new URL("https://api.anthropic.com/v1/models");
+    url.searchParams.set("limit", "1000");
+    if (afterId) url.searchParams.set("after_id", afterId);
+
+    const payload = await request(url.toString(), {
+      method: "GET",
+      headers: {
+        "x-api-key": apiKey,
+        "anthropic-version": "2023-06-01",
+        "anthropic-dangerous-direct-browser-access": "true"
+      },
+      describe: describeListStatus,
+      signal
+    });
+
+    for (const entry of payload.data || []) {
+      if (!entry?.id) continue;
+      out.push({ id: entry.id, label: entry.display_name || entry.id });
+    }
+    if (!payload.has_more || !payload.last_id) break;
+    afterId = payload.last_id;
+  }
+  return out;
+}
+
+/* OpenAI's list is everything on the account — embeddings, speech,
+   images, moderation — and none of those can write a social post.
+   Offering them would only be a way to pick a model that fails later, at
+   generation time, for a reason the picker already knew about. */
+const OPENAI_NOT_TEXT = /embedding|moderation|transcribe|whisper|dall-e|sora|tts|-audio|-image|-realtime|^davinci-|^babbage-/i;
+
+async function openaiModels(apiKey, signal) {
+  const payload = await request("https://api.openai.com/v1/models", {
+    method: "GET",
+    headers: { Authorization: `Bearer ${apiKey}` },
+    describe: describeListStatus,
+    signal
+  });
+
+  /* `created` is a unix timestamp; newest first puts the model someone is
+     most likely reaching for at the top of a long list. */
+  const all = (payload.data || [])
+    .filter((entry) => entry?.id)
+    .sort((a, b) => Number(b.created || 0) - Number(a.created || 0));
+
+  const usable = all.filter((entry) => !OPENAI_NOT_TEXT.test(entry.id));
+  /* If that pattern ever matches everything — a naming change at OpenAI
+     would do it — a noisy picker beats an empty one. */
+  return (usable.length ? usable : all).map((entry) => ({ id: entry.id, label: entry.id }));
+}
+
+async function geminiModels(apiKey, signal) {
+  const out = [];
+  let pageToken = "";
+
+  for (let page = 0; page < LIST_PAGE_CAP; page += 1) {
+    const url = new URL("https://generativelanguage.googleapis.com/v1beta/models");
+    url.searchParams.set("pageSize", "1000");
+    if (pageToken) url.searchParams.set("pageToken", pageToken);
+
+    const payload = await request(url.toString(), {
+      method: "GET",
+      headers: { "x-goog-api-key": apiKey },
+      describe: describeListStatus,
+      signal
+    });
+
+    for (const entry of payload.models || []) {
+      /* Embedding and token-counting models arrive in the same list and
+         cannot answer a generateContent call. */
+      if (!(entry?.supportedGenerationMethods || []).includes("generateContent")) continue;
+      /* callGemini() builds `models/${id}:generateContent`, so what gets
+         stored has to be the bare id without that prefix. */
+      const id = String(entry.name || "").replace(/^models\//, "");
+      if (!id) continue;
+      out.push({ id, label: entry.displayName || id });
+    }
+
+    pageToken = payload.nextPageToken || "";
+    if (!pageToken) break;
+  }
+  return out;
+}
+
+/* Paging can repeat an entry across a page boundary, and a duplicate in a
+   picker looks like a bug in the app rather than in the cursor. */
+function dedupeModels(models) {
+  const seen = new Set();
+  return models.filter((model) => (seen.has(model.id) ? false : seen.add(model.id)));
+}
+
+/* ------------------------------------------------------------
    TRANSPORT
    ------------------------------------------------------------ */
 
-async function request(url, { headers, body, signal }) {
+/* `describe` is a parameter because the same status code means different
+   things to the two callers: a 404 from a generation call is a bad model
+   id, a 404 from the model list is a bad endpoint, and telling someone to
+   fix the wrong one of those wastes their afternoon. */
+async function request(url, { method = "POST", headers, body, signal, describe = describeStatus }) {
+  const hasBody = body !== undefined;
   let response;
   try {
     response = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", ...headers },
-      body: JSON.stringify(body),
+      method,
+      headers: { ...(hasBody ? { "Content-Type": "application/json" } : {}), ...headers },
+      ...(hasBody ? { body: JSON.stringify(body) } : {}),
       signal
     });
   } catch (error) {
@@ -252,7 +404,7 @@ async function request(url, { headers, body, signal }) {
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
     const detail = payload.error?.message || payload.error?.status || payload.message || "";
-    throw new ProviderError(describeStatus(response.status, detail), { status: response.status, hint: detail });
+    throw new ProviderError(describe(response.status, detail), { status: response.status, hint: detail });
   }
   return payload;
 }
@@ -267,6 +419,19 @@ function describeStatus(status, detail) {
   if (status === 401) return "The provider rejected that API key.";
   if (status === 403) return "That key is not allowed to use this model.";
   if (status === 404) return "That model id was not found on this account.";
+  if (status === 429) return "Rate limited or out of quota. Wait a moment and try again.";
+  if (status >= 500) return "The provider is having trouble right now.";
+  return detail ? `The provider refused the request: ${detail}` : `The provider returned ${status}.`;
+}
+
+/* The same codes, read as answers to "is this key good?" rather than to
+   "did this generation work?". Gemini reports a bad key as a 400 with the
+   reason in the body, so that one case is sniffed rather than mapped. */
+function describeListStatus(status, detail) {
+  if (status === 401) return "The provider rejected that API key.";
+  if (status === 400 && /api[\s_-]?key/i.test(detail)) return "The provider rejected that API key.";
+  if (status === 403) return "That key is not allowed to list models.";
+  if (status === 404) return "The provider has no model list at that address.";
   if (status === 429) return "Rate limited or out of quota. Wait a moment and try again.";
   if (status >= 500) return "The provider is having trouble right now.";
   return detail ? `The provider refused the request: ${detail}` : `The provider returned ${status}.`;

@@ -23,10 +23,11 @@ import {
   uniquePlatformKey, validateData
 } from "./data.js";
 import { buildCopyText, platformHomeUrl, platformLabel, variantChecks } from "./platforms.js";
-import { PROMPT_VERSION, ProviderError, generateDrafts, modelsMatch, receiptState } from "./providers.js";
+import { PROMPT_VERSION, ProviderError, generateDrafts, listModels, modelsMatch, receiptState } from "./providers.js";
 import {
   PROVIDERS, PROVIDER_KEYS, clearCredentials, clearDraftBrief, fingerprint, readCredentials,
-  readDraftBrief, readPrefs, session, writeCredentials, writeDraftBrief, writePrefs
+  readDraftBrief, readModelCatalog, readPrefs, session, writeCredentials, writeDraftBrief,
+  writeModelCatalog, writePrefs
 } from "./settings.js";
 import { SyncError, Workspace } from "./sync.js";
 import { THEMES, applyTheme, currentTheme, setTheme, toggleTheme, watchSystemTheme } from "./theme.js";
@@ -1734,13 +1735,25 @@ function openSyncDialog() {
               <div class="field">
                 <label for="k-${id}">${esc(PROVIDERS[id].label)} API key</label>
                 <input class="input" id="k-${id}" name="key_${id}" type="password" autocomplete="off" spellcheck="false"
+                       data-key-for="${id}"
                        placeholder="${esc(PROVIDERS[id].placeholder)}" value="${esc(credentials.keys[id])}">
                 <p class="hint"><a href="${esc(PROVIDERS[id].keysUrl)}" target="_blank" rel="noopener">Get a key ↗</a></p>
               </div>
               <div class="field">
                 <label for="m-${id}">Model</label>
-                <input class="input" id="m-${id}" name="model_${id}" autocomplete="off" spellcheck="false"
-                       value="${esc(credentials.models[id])}" placeholder="${esc(PROVIDERS[id].defaultModel)}">
+                <div class="field-row">
+                  <select class="input" id="m-${id}" name="model_${id}" data-model-select="${id}">
+                    ${modelOptions(id, credentials.models[id], readModelCatalog(id, credentials.keys[id]))}
+                  </select>
+                  <button class="btn btn-ghost btn-sm" type="button" data-act="test-models" data-provider="${id}"
+                          title="Check the key and reload the model list">${icon("refresh")} Test</button>
+                </div>
+                <input class="input field-sub" id="mc-${id}" name="custom_${id}" autocomplete="off" spellcheck="false"
+                       aria-label="${esc(PROVIDERS[id].label)} model id"
+                       value="${esc(credentials.models[id])}" placeholder="${esc(PROVIDERS[id].defaultModel)}" hidden>
+                <p class="field-status" id="ms-${id}" role="status" aria-live="polite">
+                  ${modelStatusLine(id, credentials.keys[id], readModelCatalog(id, credentials.keys[id]))}
+                </p>
               </div>
               ${PROVIDERS[id].supportsEffort ? `
                 <div class="field">
@@ -1771,6 +1784,151 @@ function openSyncDialog() {
     </form>`, { size: "" });
 }
 
+/* ------------------------------------------------------------
+   THE MODEL PICKER
+
+   Which models a key can use is the provider's answer, not this app's, so
+   the picker is filled from a live call (Test) and from the last answer
+   that call got. Three states have to keep working regardless:
+
+     · no key yet — nothing to ask with
+     · a key the provider will not answer for — CORS, offline, revoked
+     · a saved model the provider no longer lists
+
+   In all three the operator must still be able to set a model, which is
+   what the "Other" escape hatch is for. A picker that can only offer what
+   a successful fetch returned would, on a failed fetch, be a picker that
+   cannot be used at all.
+   ------------------------------------------------------------ */
+
+const CUSTOM_MODEL = "__custom__";
+
+function modelOptions(providerId, selected, catalog) {
+  const listed = catalog?.models || [];
+  const known = new Set(listed.map((model) => model.id));
+  const chosen = String(selected || "").trim();
+  const parts = [];
+
+  if (listed.length) {
+    parts.push(`<optgroup label="Available to this key">`);
+    for (const model of listed) {
+      const label = model.label && model.label !== model.id ? `${model.label} — ${model.id}` : model.id;
+      parts.push(`<option value="${esc(model.id)}"${model.id === chosen ? " selected" : ""}>${esc(label)}</option>`);
+    }
+    parts.push(`</optgroup>`);
+  }
+
+  /* Whatever is saved stays selectable even when the fetched list does not
+     contain it. Dropping it would silently re-point every future run at
+     some other model, which is the one thing this picker must not do. */
+  if (chosen && !known.has(chosen)) {
+    parts.push(listed.length
+      ? `<optgroup label="Saved on this device"><option value="${esc(chosen)}" selected>${esc(chosen)} — not in the fetched list</option></optgroup>`
+      : `<option value="${esc(chosen)}" selected>${esc(chosen)}</option>`);
+  }
+
+  parts.push(`<option value="${CUSTOM_MODEL}">Other — type a model id…</option>`);
+  return parts.join("");
+}
+
+function modelStatusLine(providerId, apiKey, catalog) {
+  if (!String(apiKey || "").trim()) {
+    return "Paste a key above, then Test to load the models it can use.";
+  }
+  if (!catalog?.models?.length) {
+    return "Test the key to load the models it can use.";
+  }
+  const when = catalog.fetchedAt ? ` ${relTime(catalog.fetchedAt)}` : "";
+  return `${plural(catalog.models.length, "model")} listed by ${esc(PROVIDERS[providerId].label)}${esc(when)}. Test again to refresh.`;
+}
+
+/* The value the picker is currently pointing at, custom field included, so
+   a refresh can put the selection back where the operator left it. */
+function currentModelChoice(providerId) {
+  const select = el(`#m-${providerId}`);
+  if (!select) return "";
+  if (select.value !== CUSTOM_MODEL) return select.value;
+  return (el(`#mc-${providerId}`)?.value || "").trim();
+}
+
+function paintModelPicker(providerId, catalog, selected) {
+  const select = el(`#m-${providerId}`);
+  if (!select) return;
+  select.innerHTML = modelOptions(providerId, selected, catalog);
+  /* An id the fetched list does not have is still offered above, so this
+     only falls through to the custom field when there was no id at all. */
+  if (!select.value || select.value === CUSTOM_MODEL) select.value = CUSTOM_MODEL;
+  syncCustomModelField(providerId);
+}
+
+function syncCustomModelField(providerId) {
+  const select = el(`#m-${providerId}`);
+  const custom = el(`#mc-${providerId}`);
+  if (!select || !custom) return;
+  custom.hidden = select.value !== CUSTOM_MODEL;
+}
+
+function setModelStatus(providerId, kind, html) {
+  const node = el(`#ms-${providerId}`);
+  if (!node) return;
+  const glyph = { good: "check-circle", bad: "alert", busy: "" }[kind] || "";
+  node.className = `field-status${kind ? ` is-${kind}` : ""}`;
+  node.innerHTML = `${kind === "busy" ? `<span class="spinner"></span>` : glyph ? icon(glyph) : ""}<span>${html}</span>`;
+}
+
+/* Retyping a key invalidates the list that was fetched with the old one.
+   Saying so is the honest move: the picker's contents are now a claim
+   about a key that is no longer in the box. */
+function markModelsStale(providerId) {
+  const node = el(`#ms-${providerId}`);
+  if (!node) return;
+  const key = (el(`#k-${providerId}`)?.value || "").trim();
+  setModelStatus(providerId, "", key
+    ? "Key changed. Test it to load the models it can use."
+    : "Paste a key above, then Test to load the models it can use.");
+}
+
+async function testModels(node) {
+  const providerId = node.dataset.provider;
+  const meta = PROVIDERS[providerId];
+  if (!meta || !el(`#m-${providerId}`)) return;
+
+  const apiKey = (el(`#k-${providerId}`)?.value || "").trim();
+  /* Read the selection BEFORE the picker is rebuilt under it. */
+  const chosen = currentModelChoice(providerId);
+
+  const label = node.innerHTML;
+  node.disabled = true;
+  node.innerHTML = `<span class="spinner"></span> Testing`;
+  setModelStatus(providerId, "busy", `Asking ${esc(meta.label)} which models this key can use…`);
+
+  try {
+    const catalog = await listModels({ provider: providerId, apiKey });
+    writeModelCatalog(providerId, { models: catalog.models, apiKey, fetchedAt: catalog.fetchedAt });
+    paintModelPicker(providerId, catalog, chosen);
+
+    const missing = chosen && !catalog.models.some((model) => model.id === chosen);
+    setModelStatus(providerId, "good",
+      `Key works. ${esc(plural(catalog.models.length, "model"))} available.` +
+      (missing ? ` <strong>${esc(chosen)}</strong> is not among them — pick one from the list.` : ""));
+  } catch (error) {
+    setModelStatus(providerId, "bad", esc(describeError(error)));
+  } finally {
+    node.disabled = false;
+    node.innerHTML = label;
+  }
+}
+
+/* The picker's own value, unless it is pointing at "Other", in which case
+   the typed id is the answer. Falls back to the provider default so the
+   saved model is never the empty string. */
+function chosenModel(values, providerId) {
+  const picked = String(values.get(`model_${providerId}`) || "").trim();
+  const typed = String(values.get(`custom_${providerId}`) || "").trim();
+  const resolved = picked === CUSTOM_MODEL ? typed : picked;
+  return resolved || PROVIDERS[providerId].defaultModel;
+}
+
 async function submitSyncForm(form) {
   const values = new FormData(form);
   const button = form.querySelector("button[type=submit]");
@@ -1780,7 +1938,7 @@ async function submitSyncForm(form) {
     provider: values.get("provider"),
     effort: values.get("effort") || "",
     keys: Object.fromEntries(PROVIDER_KEYS.map((id) => [id, (values.get(`key_${id}`) || "").trim()])),
-    models: Object.fromEntries(PROVIDER_KEYS.map((id) => [id, (values.get(`model_${id}`) || "").trim() || PROVIDERS[id].defaultModel]))
+    models: Object.fromEntries(PROVIDER_KEYS.map((id) => [id, chosenModel(values, id)]))
   };
 
   if (Boolean(next.githubToken) !== Boolean(next.gistId)) {
@@ -2096,6 +2254,7 @@ function handleAction(act, node, event) {
       return;
 
     case "sync-settings": closeModal(); return openSyncDialog();
+    case "test-models": return testModels(node);
     case "history": return openHistoryDialog();
     case "shortcuts": return openShortcutsDialog();
     case "record-external": return openExternalDialog();
@@ -2151,6 +2310,10 @@ function handleAction(act, node, event) {
 
 function onInput(event) {
   const target = event.target;
+
+  /* A retyped key makes the model list next to it a claim about a key that
+     is no longer in the box. */
+  if (target.dataset.keyFor) { markModelsStale(target.dataset.keyFor); return; }
 
   if (target.id === "q") {
     state.filters.q = target.value;
@@ -2231,6 +2394,12 @@ function onChange(event) {
     if (!variant.scheduledAt && variant.status === "scheduled") variant.status = "approved";
     post.updatedAt = nowIso();
     commit();
+    return;
+  }
+
+  if (target.dataset.modelSelect) {
+    syncCustomModelField(target.dataset.modelSelect);
+    if (target.value === CUSTOM_MODEL) el(`#mc-${target.dataset.modelSelect}`)?.focus();
     return;
   }
 
