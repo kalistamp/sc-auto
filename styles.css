@@ -118,7 +118,7 @@
        Pages CDN is serving a stale stylesheet and the app says so out
        loud instead of failing in some confusing partial way. Bump it
        together with ?v= on the <link>/<script> and data-build. */
-    --build: "3.2.1";
+    --build: "3.3.0";
 
     color-scheme: light;
 }
@@ -1012,6 +1012,41 @@ a.launch:focus-visible { outline: 2px solid var(--copper); outline-offset: 2px; 
 
 .compose-layout { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 1.2rem; align-items: start; }
 
+/* ---- starter ideas ----
+   One click fills the brief's only required field. They come from the
+   organization's own approved facts, so a chip is always something the
+   operator has already said they are happy to publish. */
+.chips-lead { margin-bottom: .5rem; }
+.chips { display: flex; flex-wrap: wrap; gap: .4rem; }
+.chip {
+    padding: .35em .8em;
+    border: 1px dashed var(--line-strong);
+    border-radius: var(--r-pill);
+    background: var(--surface-2);
+    color: var(--ink-soft);
+    font-size: .8rem; text-align: left;
+    cursor: pointer;
+    transition: border-color var(--dur) var(--ease), background var(--dur) var(--ease), color var(--dur) var(--ease);
+}
+.chip:hover { border-style: solid; border-color: var(--accent); background: var(--accent-wash); color: var(--accent); }
+
+/* ---- the optional half of the brief ----
+   Shut by default: the whole point of the redesign is that a brief is
+   one line, and a stack of empty boxes under it says otherwise. */
+.more > summary {
+    display: flex; align-items: center; gap: .6rem;
+    cursor: pointer;
+    list-style: none;
+    padding: .2rem 0;
+}
+.more > summary::-webkit-details-marker { display: none; }
+.more > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: var(--r-sm); }
+.more > summary h3 { margin-bottom: 0; }
+.more-note { font-size: .78rem; color: var(--ink-faint); }
+.more-mark { margin-left: auto; color: var(--ink-faint); transition: transform var(--dur) var(--ease); }
+.more[open] > summary .more-mark { transform: rotate(180deg); }
+.more-body { padding-top: .9rem; }
+
 .generate-bar {
     display: flex; align-items: center; gap: 1rem; flex-wrap: wrap;
     padding: 1.1rem 1.3rem;
@@ -1075,6 +1110,7 @@ button.receipt { cursor: pointer; }
     display: flex; align-items: flex-start; gap: 1rem; flex-wrap: wrap;
     margin-bottom: 1.2rem;
 }
+.editor-head .row-meta { margin-top: .6rem; }
 .crumb {
     display: inline-flex; align-items: center; gap: .3em;
     border: 0; background: none; padding: 0;
@@ -1088,24 +1124,54 @@ button.receipt { cursor: pointer; }
 .crumb .ico { transform: rotate(90deg); }
 .crumb:hover { color: var(--accent); }
 
-.canonical {
-    padding: 1rem 1.1rem;
-    border: 1px solid var(--line);
-    border-left: 3px solid var(--accent);
-    border-radius: var(--r-md);
-    background: var(--surface);
-    margin-bottom: 1rem;
-}
+/* THE EDITOR'S TWO COLUMNS OWN THEIR OWN SPACING.
+
+   Every block in here used to bring its own margin, and several brought
+   none — the warnings list sat directly against the shared message with
+   nothing between them, close enough to read as an overlap. Margins that
+   have to be undone with an inline style at one call site and added at
+   another cannot be reasoned about, so the columns are flex containers
+   with a single gap and the children carry no vertical margin at all.
+   Anything added to either column is spaced correctly by construction. */
+.editor-main, .editor-side { display: flex; flex-direction: column; gap: 1rem; min-width: 0; }
+/* The margin reset that goes with this lives at the END of this section.
+   It has to: `.notes` and the rest carry their own margins and are
+   declared below, at the same specificity, so a reset written here would
+   be the one that loses. */
+
+.canonical { border-left: 3px solid var(--accent); }
+.canonical .card-body { padding-top: .9rem; }
 .canonical .field { margin-bottom: 0; }
+/* The head carries two controls, so it has to wrap before it squeezes
+   the heading into a column of single letters. */
+.canonical .card-head { flex-wrap: wrap; row-gap: .5rem; }
+
+/* A count on a button label — how many earlier versions are kept. */
+.count-pip {
+    display: inline-block;
+    min-width: 1.35em;
+    padding: 0 .35em;
+    border-radius: var(--r-pill);
+    background: var(--bg-tint);
+    color: var(--ink-soft);
+    font-size: .72rem; font-weight: 700;
+    font-variant-numeric: tabular-nums;
+}
 
 .variant {
     border: 1px solid var(--line);
     border-radius: var(--r-md);
     background: var(--surface);
     box-shadow: var(--shadow-sm);
-    margin-bottom: 1rem;
     overflow: hidden;
 }
+/* Each field in a variant is a separate row with a rule between it and
+   the next, so a hint, a meter and the following label can never read as
+   one run-together block. */
+.variant-body > .field { margin-bottom: 0; padding-bottom: 1rem; }
+.variant-body > .field + .field,
+.variant-body > .ready + .field { border-top: 1px solid var(--line); padding-top: 1rem; }
+.variant-body > .field:last-child { padding-bottom: 0; }
 .variant-head {
     display: flex; align-items: center; gap: .6rem;
     padding: .75rem 1.05rem;
@@ -1155,6 +1221,10 @@ button.receipt { cursor: pointer; }
 
 .actions { display: flex; align-items: center; gap: .45rem; flex-wrap: wrap; margin-top: 1rem; }
 .actions .spacer { min-width: .5rem; }
+/* Inside a variant the action row is the last band of the card, so it
+   gets the same rule between it and the field above that the fields get
+   between themselves. */
+.variant-body > .actions { margin-top: 0; padding-top: 1rem; border-top: 1px solid var(--line); }
 
 .published-link {
     display: flex; align-items: center; gap: .5rem;
@@ -1178,7 +1248,70 @@ button.receipt { cursor: pointer; }
 }
 .detail dd { margin: .2rem 0 0; font-size: .87rem; line-height: 1.5; }
 
-/* Diff of the AI's original text against what the operator has now. */
+/* ---- ready to paste ----
+   The post as it will actually be pasted: body and hashtags together,
+   with the one copy button held against it. Accented so the eye lands
+   here rather than on the editable boxes above it — this is the thing
+   that leaves the studio. */
+.ready {
+    border: 1px solid var(--accent-soft);
+    border-radius: var(--r-md);
+    background: var(--accent-wash);
+    overflow: hidden;
+}
+.ready-head {
+    display: flex; align-items: center; gap: .7rem; flex-wrap: wrap; row-gap: .5rem;
+    padding: .7rem .85rem;
+    border-bottom: 1px solid var(--accent-soft);
+}
+.ready-head h4 {
+    display: flex; align-items: center; gap: .4em;
+    font-size: .92rem; font-weight: 650;
+}
+.ready-head h4 .ico { color: var(--accent); }
+.ready-head small { display: block; font-size: .74rem; color: var(--ink-faint); margin-top: .1rem; }
+.ready-text {
+    margin: 0;
+    padding: .85rem;
+    max-height: 320px; overflow: auto;
+    font-family: inherit;
+    font-size: .9rem; line-height: 1.6;
+    white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.ready-foot {
+    display: flex; align-items: center; gap: .5rem;
+    padding: .4rem .5rem .5rem .85rem;
+    border-top: 1px solid var(--accent-soft);
+}
+/* A published variant is a record, not a handoff. */
+.variant.is-published .ready { border-color: var(--line); background: var(--surface-2); }
+.variant.is-published .ready-head, .variant.is-published .ready-foot { border-color: var(--line); }
+
+/* ---- draft history ----
+   One block per stored generation, so two versions can be read against
+   each other without leaving the dialog. */
+.gen {
+    border: 1px solid var(--line);
+    border-radius: var(--r-md);
+    padding: .8rem .9rem;
+    margin-bottom: .9rem;
+}
+.gen:last-child { margin-bottom: 0; }
+.gen.is-current { border-color: var(--accent-soft); background: var(--accent-wash); }
+.gen-head {
+    display: flex; align-items: center; gap: .55rem; flex-wrap: wrap; row-gap: .4rem;
+    margin-bottom: .6rem;
+}
+.gen-head strong { font-size: .92rem; }
+.gen-variant + .gen-variant { margin-top: .6rem; }
+.gen-platform {
+    display: block;
+    font-size: .7rem; font-weight: 700; letter-spacing: .06em; text-transform: uppercase;
+    color: var(--ink-faint);
+}
+.gen .diff { margin-top: .3rem; max-height: 180px; }
+
+/* Earlier text, in the history dialog. */
 .diff {
     margin: .9rem 0 0;
     padding: .8rem .9rem;
@@ -1189,6 +1322,16 @@ button.receipt { cursor: pointer; }
     white-space: pre-wrap;
     max-height: 260px; overflow: auto;
 }
+
+/* LAST IN THIS SECTION, DELIBERATELY.
+
+   The editor columns space their children with one flex gap, which only
+   holds if the children bring no margins of their own. Several of them
+   do — .notes carries .9rem, and it is declared above at the same
+   specificity — so this reset has to come after everything it resets or
+   it silently loses and the gaps go uneven again. Anything added to the
+   editor below this line needs the same treatment. */
+.editor-main > *, .editor-side > * { margin: 0; }
 
 /* ============================================================
    QUEUE
@@ -1344,6 +1487,19 @@ table.log .num { font-variant-numeric: tabular-nums; font-family: var(--font-mon
 .history-item .stamp { flex: 1; }
 
 .btn-row { display: flex; gap: .45rem; flex-wrap: wrap; }
+.btn-row + .btn-row-tight { margin-top: .5rem; }
+
+/* A label on a definition term saying the value under it is the model's
+   assumption rather than something the operator typed. */
+.dt-tag {
+    margin-left: .5em;
+    padding: .05em .45em;
+    border-radius: var(--r-pill);
+    background: var(--info-wash);
+    color: var(--info);
+    font-size: .62rem; font-weight: 700; letter-spacing: .04em; text-transform: none;
+    cursor: help;
+}
 
 /* ============================================================
    TOAST

@@ -32,7 +32,7 @@ export const APP_PASSKEY = "p";
    runs at all, and the passkey gate renders with a dead button. That has
    happened. tests/boot.test.mjs is what enforces it now — bump all five
    together and run `npm run check`. */
-export const BUILD = "3.2.1";
+export const BUILD = "3.3.0";
 
 /* The single file inside the gist that holds the whole workspace. */
 export const GIST_FILENAME = "sc_data.json";
@@ -56,6 +56,15 @@ export const RUN_LOG_LIMIT = 150;
 /* Activity entries kept. Shorter than the run log: these are UI
    breadcrumbs, not an audit record. */
 export const ACTIVITY_LIMIT = 120;
+
+/* Earlier drafts kept per post, so re-running a generation can be
+   compared against — and reverted to — what it replaced.
+
+   Bounded because the whole workspace is one JSON file and a snapshot
+   carries the full text of every platform version. Eight is roughly a
+   morning of iterating on one post, which is as far back as anyone has
+   ever wanted to reach. Beyond that the older ones fall off the end. */
+export const DRAFT_HISTORY_LIMIT = 8;
 
 /* How long the Undo button stays on a toast, in ms. */
 export const UNDO_MS = 9000;

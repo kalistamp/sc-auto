@@ -187,6 +187,64 @@ test("the instructions carry the org's facts and rules and nothing invented", as
   assert.match(system, /Never invent statistics/);
 });
 
+/* ------------------------------------------------------------
+   A ONE-LINE BRIEF, AND A SECOND PASS OVER IT
+   ------------------------------------------------------------ */
+
+test("a one-line brief is sent whole, and the model is told to fill in the rest", async () => {
+  const calls = mockFetch(() => ({
+    payload: { id: "m", model: "m", content: [{ type: "text", text: JSON.stringify(goodPackage) }] }
+  }));
+
+  await generateDrafts({
+    credentials: credentialsFor("anthropic"),
+    brief: { topic: "Old laptops in closets", platforms: ["reddit", "facebook"], guidance: {} },
+    organization
+  });
+
+  const call = calls[0];
+  assert.match(call.body.system, /Filling in the brief/);
+  assert.match(call.body.system, /may be a single line/i);
+  assert.doesNotMatch(call.body.system, /Rewriting/, "a first pass has nothing to rewrite");
+
+  const input = JSON.parse(call.body.messages[0].content);
+  assert.equal(input.brief.topic, "Old laptops in closets");
+  assert.equal(input.brief.audience, "", "an empty field is sent as empty rather than guessed at here");
+  assert.equal(input.sharedMessage, undefined);
+
+  /* The three fields the operator no longer has to type have to be part
+     of the contract, or there is nothing to fill the blanks with. */
+  const schema = call.body.output_config.format.schema;
+  for (const field of ["campaignName", "audience", "objective"]) {
+    assert.ok(schema.required.includes(field), `${field} must be required of the model`);
+    assert.ok(schema.properties[field], `${field} must be in the output schema`);
+  }
+});
+
+test("a re-run passes the edited shared message as the steer and the old drafts as what not to repeat", async () => {
+  const calls = mockFetch(() => ({
+    payload: { id: "m", model: "m", content: [{ type: "text", text: JSON.stringify(goodPackage) }] }
+  }));
+
+  await generateDrafts({
+    credentials: credentialsFor("anthropic"),
+    brief: {
+      topic: "Old laptops", platforms: ["reddit", "facebook"], guidance: {},
+      sharedMessage: "Lead with the free pickup, not the students.",
+      previousDrafts: [{ platform: "reddit", copy: "The first attempt" }]
+    },
+    organization
+  });
+
+  const call = calls[0];
+  assert.match(call.body.system, /Rewriting/);
+  assert.match(call.body.system, /Do not repeat it sentence by sentence/);
+
+  const input = JSON.parse(call.body.messages[0].content);
+  assert.equal(input.sharedMessage, "Lead with the free pickup, not the students.");
+  assert.equal(input.previousDrafts[0].copy, "The first attempt");
+});
+
 test("alias resolution counts as a match; a genuine swap does not", () => {
   assert.equal(modelsMatch("claude-opus-5", "claude-opus-5-20260317"), true);
   assert.equal(modelsMatch("claude-opus-5", "claude-opus-5"), true);

@@ -226,6 +226,82 @@ test("the platform front doors are reachable without digging", async () => {
     "front doors must be real links (middle-click, open in new tab, copy address)");
 });
 
+/* ------------------------------------------------------------
+   6. THE EDITOR, AS THE OPERATOR ASKED FOR IT
+
+   Each of these is a fix that was reported by hand, and each is the
+   kind that quietly comes back the next time the markup is rearranged.
+   ------------------------------------------------------------ */
+
+test("a platform version offers exactly one copy control, next to the text it copies", async () => {
+  const app = await read("js/app.js");
+  const card = app.slice(app.indexOf("function variantCard("), app.indexOf("function readyBlock("));
+
+  const copies = [...card.matchAll(/data-act="copy"/g)].length;
+  assert.equal(copies, 0, "the copy button belongs to the ready-to-paste block, not the action row");
+  assert.match(card, /readyBlock\(variant, meta\)/, "every variant must render the ready block");
+
+  const ready = app.slice(app.indexOf("function readyBlock("), app.indexOf("function variantMeta("));
+  assert.equal([...ready.matchAll(/data-act="copy"/g)].length, 1, "exactly one Copy post button");
+  assert.match(ready, /Copy post/);
+
+  /* "Copy for pasting" was the Open button with no platform to open —
+     a second control with the same effect and a different name. Both
+     labels are still discussed in the comments explaining why they
+     went, so this reads the code with the prose stripped out. */
+  const markup = app.replace(/\/\*[\s\S]*?\*\//g, "");
+  assert.doesNotMatch(markup, /Copy for pasting/, "a duplicate copy control under another name");
+  assert.doesNotMatch(markup, /Model's original/, "superseded by the draft history dialog");
+});
+
+test("the hashtags a person types are shown the way they will be pasted", async () => {
+  const app = await read("js/app.js");
+  /* One function builds the clipboard text, the published record, and
+     this preview, so what is shown cannot drift from what is copied. */
+  assert.match(app, /function readyBody\(variant, meta\) \{\s*const text = buildCopyText\(variant\);/);
+  /* And it has to follow both fields that feed it while they are typed. */
+  const input = app.slice(app.indexOf("function onInput("), app.indexOf("let renderTimer"));
+  assert.match(input, /field === "body" \|\| field === "hashtags"/);
+  assert.match(input, /ready-\$\{variantId\}/);
+});
+
+test("the shared message can be re-run, and what it replaces is kept", async () => {
+  const app = await read("js/app.js");
+  const card = app.slice(app.indexOf("function canonicalCard("), app.indexOf("/* Only the rows that carry"));
+  assert.match(card, /data-act="rerun-drafts"/, "the button has to sit with the field it re-runs");
+  assert.match(card, /data-act="draft-history"/, "and the history it produces has to be reachable from there");
+
+  /* The snapshot must be taken before the model is called, not after. */
+  const rerun = app.slice(app.indexOf("async function rerunDrafts("), app.indexOf("function restoreGeneration("));
+  assert.ok(rerun.indexOf("pushGeneration(") < rerun.indexOf("await generateDrafts("),
+    "the current draft must be saved before anything can overwrite it");
+  assert.match(rerun, /status !== "published"/, "a published record is never rewritten");
+});
+
+test("the editor columns space themselves, rather than each block guessing", async () => {
+  const app = await read("js/app.js");
+  const css = await read("styles.css");
+
+  const editor = app.slice(app.indexOf("function renderEditor("), app.indexOf("function canonicalCard("));
+  assert.match(editor, /class="editor-main"/);
+  assert.match(editor, /class="editor-side"/);
+  /* An inline margin here is what let the warnings box sit flush against
+     the shared message with nothing between them. */
+  assert.doesNotMatch(editor, /style="margin/, "editor spacing belongs in the stylesheet");
+
+  assert.match(css, /\.editor-main, \.editor-side \{[^}]*gap: 1rem/);
+  assert.match(css, /\.variant-body > \.field \+ \.field/, "fields need a rule between them, not just a margin");
+
+  /* One flex gap only holds if the children bring no margins, and the
+     reset is the same specificity as the rules it undoes — so it only
+     wins from further down the file. Cheap to assert, invisible to
+     debug: the symptom is uneven gaps, not a broken rule. */
+  const reset = css.indexOf(".editor-main > *, .editor-side > *");
+  assert.ok(reset > -1, "the editor columns need their margin reset");
+  assert.ok(reset > css.indexOf("\n.notes {"), "the reset must come after the margins it resets");
+  assert.ok(reset < css.indexOf("   QUEUE"), "and stay in the editor section it belongs to");
+});
+
 test("the passkey gate has the exact anchors app.js wires itself to", async () => {
   const html = await read("index.html");
   const app = await read("js/app.js");

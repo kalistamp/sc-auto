@@ -27,7 +27,7 @@
        platform added years from now as for the ones shipped here.
    ============================================================ */
 
-import { ACTIVITY_LIMIT, RUN_LOG_LIMIT, SIMILARITY_THRESHOLD } from "./config.js";
+import { ACTIVITY_LIMIT, DRAFT_HISTORY_LIMIT, RUN_LOG_LIMIT, SIMILARITY_THRESHOLD } from "./config.js";
 
 export const SCHEMA_VERSION = 3;
 
@@ -433,6 +433,10 @@ function migratePost(post) {
   return {
     id: post?.id || createId("post"),
     campaign: String(post?.campaign || "Untitled campaign"),
+    /* The one thing a brief now has to say. Older posts predate it and
+       carried the same information in keyMessage, so that is where their
+       topic comes from rather than leaving the field blank. */
+    topic: String(post?.topic || post?.keyMessage || ""),
     objective: String(post?.objective || ""),
     audience: String(post?.audience || ""),
     keyMessage: String(post?.keyMessage || ""),
@@ -442,6 +446,14 @@ function migratePost(post) {
     createdAt: post?.createdAt || nowIso(),
     updatedAt: post?.updatedAt || post?.createdAt || nowIso(),
     tags: asStringList(post?.tags, []),
+    /* Which brief fields the model filled in for itself. Recorded so the
+       editor can label them as the model's reading rather than passing
+       them off as something the operator said. */
+    derived: asStringList(post?.derived, []),
+    /* Superseded drafts, newest first. See snapshotGeneration. */
+    generations: (Array.isArray(post?.generations) ? post.generations : [])
+      .map(migrateGeneration)
+      .slice(0, DRAFT_HISTORY_LIMIT),
     /* Schema 1 stored a single `model` string. Carry it into both slots
        so the receipt for an old post still reads truthfully: we know
        what was asked for, and we have no separate record of what
@@ -461,8 +473,30 @@ function migratePost(post) {
   };
 }
 
+function migrateGeneration(entry) {
+  return {
+    id: entry?.id || createId("gen"),
+    at: entry?.at || nowIso(),
+    note: String(entry?.note || ""),
+    canonical: String(entry?.canonical || ""),
+    ai: entry?.ai && typeof entry.ai === "object" ? entry.ai : null,
+    variants: (Array.isArray(entry?.variants) ? entry.variants : []).map((variant) => ({
+      variantId: String(variant?.variantId || ""),
+      platform: String(variant?.platform || NEUTRAL_PLATFORM_KEY),
+      title: String(variant?.title || ""),
+      body: String(variant?.body || ""),
+      aiBody: String(variant?.aiBody || ""),
+      hashtags: asStringList(variant?.hashtags, []),
+      notes: String(variant?.notes || ""),
+      status: VARIANT_STATES.includes(variant?.status) ? variant.status : "draft"
+    }))
+  };
+}
+
 function migrateVariant(variant) {
   const body = String(variant?.body || "");
+  const status = VARIANT_STATES.includes(variant?.status) ? variant.status : "draft";
+  const scheduledAt = String(variant?.scheduledAt || "");
   return {
     id: variant?.id || createId("variant"),
     /* Kept exactly as recorded. Schema 2 replaced an unrecognized key
@@ -479,8 +513,14 @@ function migrateVariant(variant) {
     publishedBody: String(variant?.publishedBody || ""),
     hashtags: asStringList(variant?.hashtags, []),
     notes: String(variant?.notes || ""),
-    status: VARIANT_STATES.includes(variant?.status) ? variant.status : "draft",
-    scheduledAt: String(variant?.scheduledAt || ""),
+    /* An approved variant that carries a date IS scheduled, and older
+       workspaces are full of ones that say otherwise: the date could be
+       set from the brief or typed into the editor without ever going
+       through the Schedule dialog, which was the only thing that moved
+       the status. Normalizing on load is what stops the same post
+       appearing in the Queue while the Overview counts nothing. */
+    status: status === "approved" && scheduledAt ? "scheduled" : status,
+    scheduledAt,
     publishedAt: String(variant?.publishedAt || ""),
     publishedUrl: String(variant?.publishedUrl || ""),
     account: String(variant?.account || "")
@@ -553,11 +593,14 @@ export function validateData(data) {
    because it is a decision rather than a consequence. */
 export function derivePostStatus(post) {
   if (post.status === "archived") return "archived";
-  const states = (post.variants || []).map((variant) => variant.status);
+  const variants = post.variants || [];
+  const states = variants.map((variant) => variant.status);
   if (!states.length) return "review";
   if (states.every((state) => state === "published")) return "published";
   if (states.some((state) => state === "published")) return "partial";
-  if (states.some((state) => state === "scheduled")) return "scheduled";
+  /* A date makes it scheduled even where the status says otherwise —
+     the same rule the Overview tile and the Queue read. */
+  if (variants.some((variant) => variant.status === "scheduled" || isScheduled(variant))) return "scheduled";
   if (states.every((state) => state === "approved")) return "approved";
   return "review";
 }
@@ -572,13 +615,30 @@ export const STATUS_LABELS = {
   archived: "Archived"
 };
 
+/* A brief is one sentence plus whatever else the operator felt like
+   typing, so the model is asked to fill in the rest of it — a name for
+   the campaign, who it is aimed at, what it is for. Anything the operator
+   DID supply always wins; the model only ever fills a blank.
+   `derived` records which blanks it filled, because a reader of the
+   Brief card is entitled to know which lines are the operator's own
+   words and which are the model's reading of a one-line prompt. */
 export function createPostFromGeneration(brief, generation, receipt) {
   const now = nowIso();
+  const derived = [];
+  const fill = (given, inferred, field) => {
+    const own = String(given || "").trim();
+    if (own) return own;
+    const guess = String(inferred || "").trim();
+    if (guess) derived.push(field);
+    return guess;
+  };
+
   return {
     id: createId("post"),
-    campaign: brief.campaign || "Untitled campaign",
-    objective: brief.objective || "",
-    audience: brief.audience || "",
+    campaign: fill(brief.campaign, generation.campaignName, "campaign") || "Untitled campaign",
+    topic: brief.topic || brief.keyMessage || "",
+    objective: fill(brief.objective, generation.objective, "objective"),
+    audience: fill(brief.audience, generation.audience, "audience"),
     keyMessage: brief.keyMessage || "",
     canonical: generation.canonical || "",
     status: "review",
@@ -586,6 +646,8 @@ export function createPostFromGeneration(brief, generation, receipt) {
     createdAt: now,
     updatedAt: now,
     tags: splitTags(brief.tags),
+    derived,
+    generations: [],
     ai: {
       provider: receipt.provider,
       requestedModel: receipt.requestedModel,
@@ -626,6 +688,7 @@ export function createExternalPost({ campaign, platform, body, title, publishedA
   return {
     id: createId("post"),
     campaign: campaign || "Recorded post",
+    topic: "",
     objective: "",
     audience: "",
     keyMessage: "",
@@ -635,6 +698,8 @@ export function createExternalPost({ campaign, platform, body, title, publishedA
     createdAt: now,
     updatedAt: now,
     tags: [],
+    derived: [],
+    generations: [],
     ai: {
       provider: "none", requestedModel: "", servedModel: "", promptVersion: "",
       responseId: "", usage: null, latencyMs: 0, at: "", warnings: []
@@ -655,6 +720,47 @@ export function createExternalPost({ campaign, platform, body, title, publishedA
       account: account || ""
     }]
   };
+}
+
+/* ------------------------------------------------------------
+   DRAFT HISTORY
+
+   Re-running the model over a post replaces text the operator may have
+   spent time on, and "I liked the last one better" is not a recoverable
+   position unless the last one was kept. So every re-run — and every
+   restore — snapshots what it is about to overwrite first.
+
+   A snapshot is a copy, not a reference: the whole point is that later
+   edits to the live post must not reach back and change what the record
+   says the earlier draft looked like.
+   ------------------------------------------------------------ */
+
+export function snapshotGeneration(post, { note = "" } = {}) {
+  return {
+    id: createId("gen"),
+    at: nowIso(),
+    note,
+    /* The receipt of the run that produced this text, so an old draft can
+       still say which model wrote it after a newer run has moved
+       post.ai on. */
+    ai: post.ai ? structuredClone(post.ai) : null,
+    canonical: post.canonical || "",
+    variants: (post.variants || []).map((variant) => ({
+      variantId: variant.id,
+      platform: variant.platform,
+      title: variant.title || "",
+      body: variant.body || "",
+      aiBody: variant.aiBody || "",
+      hashtags: [...(variant.hashtags || [])],
+      notes: variant.notes || "",
+      status: variant.status
+    }))
+  };
+}
+
+export function pushGeneration(post, snapshot) {
+  post.generations = [snapshot, ...(post.generations || [])].slice(0, DRAFT_HISTORY_LIMIT);
+  return post.generations;
 }
 
 export function splitTags(value) {
@@ -716,15 +822,49 @@ export function allVariants(data) {
   return data.posts.flatMap((post) => post.variants.map((variant) => ({ post, variant })));
 }
 
+/* ------------------------------------------------------------
+   WHAT COUNTS AS SCHEDULED
+
+   These two predicates exist because the Overview tile, the sidebar
+   badge, the Up next list and the Queue page each used to decide for
+   themselves, and they disagreed. The visible symptom: a post given a
+   date on the New draft form sat in the Queue under its day heading
+   while the Overview said "Scheduled 0" — the tile was counting the
+   variant STATUS, and a variant can carry a date while its status is
+   still draft or approved.
+
+   A date is the whole of what "scheduled" means here. Nothing in this
+   app publishes on a timer, so the date is a note in a diary: if it is
+   set and the post has not gone out yet, it is on the calendar,
+   whatever else is true about it. Everything that reports a schedule
+   now reads these.
+   ------------------------------------------------------------ */
+
+export function isScheduled(variant) {
+  return Boolean(variant?.scheduledAt) && variant.status !== "published";
+}
+
+/* The Queue also carries approved posts with no date yet — they are
+   waiting on a person, which is what that page is for. */
+export function isQueued(variant) {
+  return variant?.status !== "published" && (Boolean(variant?.scheduledAt) || variant?.status === "approved");
+}
+
+export function isOverdue(variant) {
+  return isScheduled(variant) && Date.parse(variant.scheduledAt) < Date.now();
+}
+
 export function countsFor(data) {
   const pairs = allVariants(data);
   return {
     posts: data.posts.length,
     needsReview: data.posts.filter((post) => derivePostStatus(post) === "review").length,
     approved: pairs.filter(({ variant }) => variant.status === "approved").length,
-    scheduled: pairs.filter(({ variant }) => variant.status === "scheduled").length,
+    scheduled: pairs.filter(({ variant }) => isScheduled(variant)).length,
+    /* What the Queue page shows, so the sidebar badge and that page can
+       never report different numbers. */
+    queued: pairs.filter(({ variant }) => isQueued(variant)).length,
     published: pairs.filter(({ variant }) => variant.status === "published").length,
-    overdue: pairs.filter(({ variant }) =>
-      variant.status === "scheduled" && variant.scheduledAt && Date.parse(variant.scheduledAt) < Date.now()).length
+    overdue: pairs.filter(({ variant }) => isOverdue(variant)).length
   };
 }

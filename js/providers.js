@@ -34,8 +34,15 @@ import { exemplarSection, voiceRules } from "./voice.js";
    Reason: voiceRules() was substantially rewritten (positive human-habits
    first, expanded lexicon, new constructions/openers, smoothness check).
    Old receipts must continue to report the prompt that actually produced
-   them; new generations get the new version string. */
-export const PROMPT_VERSION = "sct-social-5";
+   them; new generations get the new version string.
+
+   CHANGE (2026-08c): sct-social-5 → sct-social-6
+   Reason: the brief shrank to a single line. The model is now asked to
+   supply the campaign name, audience and objective itself when the
+   operator did not, and to work from a steer plus the previous drafts on
+   a re-run. Both change what the instructions say, so the version moves
+   with them. */
+export const PROMPT_VERSION = "sct-social-6";
 
 export class ProviderError extends Error {
   constructor(message, { status = 0, hint = "" } = {}) {
@@ -68,15 +75,23 @@ export async function generateDrafts({ credentials, brief, organization, recentP
   const instructions = buildInstructions(organization, brief, recentPosts);
   const input = JSON.stringify({
     brief: {
-      campaign: brief.campaign,
-      objective: brief.objective,
-      audience: brief.audience,
-      keyMessage: brief.keyMessage,
-      callToAction: brief.cta,
-      tone: brief.tone,
+      /* The only field the operator has to fill in. Everything under it
+         may be an empty string, and an empty string means "you decide"
+         rather than "leave it out" — see buildInstructions. */
+      topic: brief.topic || brief.keyMessage || "",
+      campaign: brief.campaign || "",
+      objective: brief.objective || "",
+      audience: brief.audience || "",
+      keyMessage: brief.keyMessage || "",
+      callToAction: brief.cta || "",
+      tone: brief.tone || "",
       platforms: brief.platforms,
       mustInclude: brief.mustInclude || ""
     },
+    /* Present only on a re-run: the message the operator edited by hand
+       and the drafts they were not happy with. */
+    ...(brief.sharedMessage ? { sharedMessage: brief.sharedMessage } : {}),
+    ...(brief.previousDrafts?.length ? { previousDrafts: brief.previousDrafts } : {}),
     /* Recent copy goes in so the model can deliberately vary its
        phrasing instead of rewriting last week's post. */
     recentlyPublished: recentPosts.slice(0, 12).map((post) => ({
@@ -471,8 +486,30 @@ function buildInstructions(organization, brief, recentPosts = []) {
      examples, not to substitute for them. */
   const exemplars = exemplarSection(recentPosts, brief.platforms?.[0] || "");
 
+  /* THE BRIEF IS ALLOWED TO BE ONE LINE.
+     Asking an operator to type an audience, an objective and a key
+     message before they can have a draft is asking them to write most of
+     the post — at which point they may as well write the post. So the
+     form collects a topic and the model is told, in as many words, to
+     fill in the rest of the brief itself and to report what it assumed
+     so a person can check it. */
+  const thin = `Filling in the brief
+The brief may be a single line. Where a field is empty, decide it yourself from the topic, the mission and the service area — do not ask for more, and do not stall on a placeholder. Report what you chose in "campaignName", "audience" and "objective" so the operator can see the assumptions and correct them. Where the brief does give a field, follow it exactly; never overwrite it with your own.`;
+
+  /* A re-run. The operator has read what came back once, edited the
+     shared message, and pressed the button again — so the shared message
+     is now an instruction rather than a summary, and the previous drafts
+     are the thing to move away from. */
+  const steer = brief.sharedMessage
+    ? `\nRewriting
+This is a second pass. "sharedMessage" in the input is the operator's own wording of what this post should say, edited by hand after reading the first attempt — treat it as the spine of every version and keep its meaning and emphasis intact.
+"previousDrafts" is what you produced last time. Do not repeat it sentence by sentence: change the opening, change the structure, and find a different way in. Keep anything the operator clearly kept on purpose.\n`
+    : "";
+
   return `You write social posts for ${organization.name || "a small nonprofit"}. Produce one canonical message and one distinct draft per platform.
 
+${thin}
+${steer}
 Organization
 Mission: ${organization.mission || ""}
 Service area: ${organization.serviceArea || ""}
@@ -500,8 +537,14 @@ function generationSchema(platforms) {
   return {
     type: "object",
     additionalProperties: false,
-    required: ["campaignAngle", "canonical", "variants", "warnings"],
+    required: ["campaignName", "campaignAngle", "audience", "objective", "canonical", "variants", "warnings"],
     properties: {
+      /* Three fields the operator no longer has to type. They are the
+         model's reading of a short brief, stored as such and labelled
+         that way in the editor. */
+      campaignName: { type: "string", description: "A short name for this campaign, three to six words, no quotes." },
+      audience: { type: "string", description: "Who this is written for. Echo the brief's audience if it gave one." },
+      objective: { type: "string", description: "What this post is meant to achieve. Echo the brief's objective if it gave one." },
       campaignAngle: { type: "string", description: "One sentence naming the angle taken." },
       canonical: { type: "string", description: "The shared message, platform-neutral." },
       warnings: {
@@ -574,6 +617,9 @@ function cleanGeneration(generation, platforms) {
   }
 
   return {
+    campaignName: String(generation.campaignName || "").trim().replace(/^["']|["']$/g, ""),
+    audience: String(generation.audience || "").trim(),
+    objective: String(generation.objective || "").trim(),
     campaignAngle: String(generation.campaignAngle || "").trim(),
     canonical: String(generation.canonical || "").trim(),
     warnings: Array.isArray(generation.warnings) ? generation.warnings.map(String).filter(Boolean) : [],

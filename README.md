@@ -12,8 +12,9 @@ browser, and the workspace lives in one GitHub gist that you own.
 ## The workflow
 
 ```
-brief → model drafts one version per platform → you review and edit
-      → you approve → Copy → Open the platform → you log in and paste
+one line about the post → model drafts one version per platform
+      → you review, edit, or re-run it → you approve
+      → Copy post → open the platform → you log in and paste
       → you publish → paste the link back → permanent record
 ```
 
@@ -26,14 +27,62 @@ everything around it: drafting, checking, reminding, and recordkeeping.
 
 The handoff is the same for every platform, including any you add yourself:
 
-1. **Copy** puts the approved post on your clipboard.
-2. **Open** takes you to that platform's own home or login page.
+1. **Copy post** puts the finished text — body and hashtags together — on your
+   clipboard. It sits directly under the **Ready to paste** panel, which shows
+   exactly what it will give you, so nothing about the copy is a surprise.
+2. **Open <platform>** takes you to that platform's own home or login page,
+   copying the post on the way. Platforms with no link (the neutral **Any
+   platform**, or one you have not given a URL yet) show the copy button alone
+   rather than a second control that only repeats it.
 3. You log in, paste, read it once more, and publish it yourself.
 
 There are no exceptions and no special cases. Earlier versions prefilled
 Reddit's composer through its submit URL; that was removed, because a handoff
 that behaves differently on one platform is a handoff you cannot trust at the
 one step where a mistake is public.
+
+---
+
+## Writing a brief
+
+**A brief is one line.** Say what the post is about — a sentence, a phrase,
+whatever you would say to a colleague across the room — and press *Generate
+drafts*. Under it is a row of one-click starters built from your own approved
+facts, minus anything that reads like a post you have already published.
+
+Everything else is optional and folded away under **Add detail**: campaign name,
+audience, goal, a must-include phrase, call to action, tone, target date, tags.
+Leave them blank and the model works them out from your organization profile and
+reports what it assumed; the draft's **Brief** card labels those lines
+*model's read* so you can tell its assumptions from your instructions. Anything
+you do fill in is followed exactly and never overwritten.
+
+The reasoning is simple: a form that demands an audience, an objective, and a
+key message before it will write anything is asking you to write most of the
+post. At that point you may as well write the post.
+
+---
+
+## Re-running a draft
+
+The **Shared message** at the top of a draft is the spine every platform version
+is written from — it is never published anywhere itself. Edit it and press
+**Re-run drafts**, and the model rewrites each unpublished version from your
+wording, with the drafts it is replacing passed in as what *not* to repeat.
+
+Nothing is lost when you do:
+
+- The version being replaced is snapshotted into **History** first, with the
+  receipt of the model that wrote it.
+- **History** also holds the current generation as the model wrote it, whenever
+  you have edited over it, and every restore snapshots what *it* replaces — so a
+  restore is itself undoable from the same list.
+- Approved versions go back to draft, because the text they were approved for no
+  longer exists. Published versions are never touched by any of this.
+
+The last eight versions are kept (`DRAFT_HISTORY_LIMIT` in
+[`js/config.js`](js/config.js)); the whole workspace is one JSON file, and a
+snapshot carries the full text of every platform version.
 
 ---
 
@@ -67,8 +116,8 @@ automatically re-registered as retired.
 
 ## Getting in
 
-Enter the passkey. The default is `sc`; change it in
-[`js/config.js`](js/config.js) before publishing.
+Enter the passkey. It is whatever `APP_PASSKEY` says in
+[`js/config.js`](js/config.js) — currently `p`. Change it before publishing.
 
 That passkey is a **privacy latch, not security**. These files are public, so
 anyone can read the passkey out of them. What actually protects the workspace is
@@ -148,12 +197,32 @@ quietly rewrite history:
 - `body` — the working copy you edit and approve
 - `publishedBody` — the exact text at the moment you marked it published
 
-The editor surfaces the first of these behind **Model's original**, with a
-one-click restore.
+Alongside them, `post.generations` holds the drafts a re-run or a restore
+replaced. All of it is read through one **History** button next to the shared
+message — there used to be a per-platform *Model's original* button as well, and
+two ways to reach earlier text under different names was one too many.
 
 **Record a post** (in the Library) adds something you wrote and published
 straight on a platform, without it ever being drafted here. It joins the same
 record, marked as having had no model behind it.
+
+---
+
+## What "scheduled" means
+
+A date is a note in a diary. Nothing in this app publishes on a timer, and the
+Queue is a list of things waiting for a person.
+
+So a platform version is **scheduled** when it has a date and has not been
+published — however that date got there: the target date on the brief, the
+*Planned date* field on the draft, or the Schedule dialog. All three now leave
+it in the same state. The **Queue** additionally holds approved work with no
+date on it yet, and the sidebar badge counts exactly what that page lists.
+
+That last paragraph is one rule in [`js/data.js`](js/data.js) (`isScheduled`,
+`isQueued`) that every count reads. Before, the Overview tile counted a status
+while the Queue read the date, so a post given a date on the New draft form
+appeared under its day in the Queue while the tile said **Scheduled 0**.
 
 ---
 
@@ -206,7 +275,7 @@ No install needed:
 python3 -m http.server 8000
 ```
 
-Open `http://localhost:8000` and enter `sc`.
+Open `http://localhost:8000` and enter the passkey from `js/config.js`.
 
 Tests are Node's built-in runner, no dependencies:
 
@@ -278,6 +347,16 @@ your enabled/disabled choices, guidance and account names all come across. The
 neutral **Any platform** option is added. Any platform your posts reference but
 the list no longer offers, LinkedIn included, is re-registered as retired so no
 post is orphaned or reassigned.
+
+**Within schema 3 (3.2 → 3.3).** No migration step and no version bump: posts
+gain `topic`, `derived` and `generations`, all of which default cleanly on an
+older post. Two things do change on load, both in the direction of the record
+being true:
+
+- A post written before briefs shrank has its `topic` read from its old key
+  message, so nothing shows up blank.
+- An approved version that already carries a date is opened as **scheduled**,
+  which is what it always was to the Queue.
 
 Back up before upgrading if you want a way back: Settings → Data → Backup .json.
 Schema 3 is not readable by older builds.

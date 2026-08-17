@@ -3,10 +3,11 @@ import assert from "node:assert/strict";
 import {
   NEUTRAL_PLATFORM_KEY, SCHEMA_VERSION, addActivity, addRun, countsFor, createDefaultData,
   createExternalPost, createPostFromGeneration, defaultPlatforms, derivePostStatus,
-  findSimilarPosts, getPlatform, listPlatforms, migrateData, normalizePlatform, platformKeys,
-  setActivePlatforms, splitTags, textSimilarity, uniquePlatformKey, validateData
+  findSimilarPosts, getPlatform, isQueued, isScheduled, listPlatforms, migrateData,
+  normalizePlatform, platformKeys, pushGeneration, setActivePlatforms, snapshotGeneration,
+  splitTags, textSimilarity, uniquePlatformKey, validateData
 } from "../js/data.js";
-import { ACTIVITY_LIMIT, RUN_LOG_LIMIT } from "../js/config.js";
+import { ACTIVITY_LIMIT, DRAFT_HISTORY_LIMIT, RUN_LOG_LIMIT } from "../js/config.js";
 
 test("the default workspace is valid and carries the SafeCycle context", () => {
   const data = createDefaultData();
@@ -316,4 +317,130 @@ test("counts reflect what the dashboard claims", () => {
   assert.equal(counts.scheduled, 1);
   assert.equal(counts.published, 1);
   assert.equal(counts.overdue, 1);
+});
+
+/* ------------------------------------------------------------
+   THE SCHEDULED COUNT
+
+   Reported bug: a target date was set on the New draft form, the Queue
+   listed the post under that day, and the Overview tile said
+   "Scheduled 0". The tile counted variant.status === "scheduled" while
+   the Queue read the date, so the two answered different questions.
+   ------------------------------------------------------------ */
+
+test("a date is what makes something scheduled, wherever it is counted", () => {
+  const soon = new Date(Date.now() + 86400000).toISOString();
+
+  assert.equal(isScheduled({ status: "approved", scheduledAt: soon }), true,
+    "an approved variant with a date is on the calendar");
+  assert.equal(isScheduled({ status: "draft", scheduledAt: soon }), true,
+    "a draft carrying the brief's target date is on the calendar too");
+  assert.equal(isScheduled({ status: "approved", scheduledAt: "" }), false);
+  assert.equal(isScheduled({ status: "published", scheduledAt: soon }), false,
+    "it has already gone out; it is not waiting for a date");
+
+  /* The Queue also holds approved work with no date on it yet. */
+  assert.equal(isQueued({ status: "approved", scheduledAt: "" }), true);
+  assert.equal(isQueued({ status: "draft", scheduledAt: "" }), false);
+
+  const data = createDefaultData();
+  data.posts = [
+    { id: "p1", status: "review", variants: [{ status: "approved", scheduledAt: soon }] },
+    { id: "p2", status: "review", variants: [{ status: "approved", scheduledAt: "" }] }
+  ];
+  const counts = countsFor(data);
+  assert.equal(counts.scheduled, 1, "the tile must not report 0 for a post the Queue is showing");
+  assert.equal(counts.queued, 2, "the sidebar badge counts everything the Queue page lists");
+  assert.equal(counts.overdue, 0);
+});
+
+test("an approved variant that already carries a date opens as scheduled", () => {
+  const soon = new Date(Date.now() + 86400000).toISOString();
+  const data = migrateData({
+    schemaVersion: 3,
+    posts: [{
+      id: "p1",
+      variants: [
+        { id: "v1", platform: "default", body: "text", status: "approved", scheduledAt: soon },
+        { id: "v2", platform: "default", body: "text", status: "approved", scheduledAt: "" },
+        { id: "v3", platform: "default", body: "text", status: "draft", scheduledAt: soon }
+      ]
+    }]
+  });
+
+  const [dated, undated, draft] = data.posts[0].variants;
+  assert.equal(dated.status, "scheduled", "the status is brought into line with the date on load");
+  assert.equal(undated.status, "approved", "nothing else is touched");
+  assert.equal(draft.status, "draft", "approval is still a separate decision from a date");
+  assert.equal(derivePostStatus(data.posts[0]), "scheduled");
+});
+
+/* ------------------------------------------------------------
+   A ONE-LINE BRIEF
+   ------------------------------------------------------------ */
+
+test("the model fills in the brief it was not given, and the record says which parts", () => {
+  const generation = {
+    campaignName: "Closet Audit",
+    audience: "Bay Area neighbors with unused electronics",
+    objective: "Book free pickups before term starts",
+    canonical: "Shared message",
+    warnings: [],
+    variants: [{ platform: "reddit", title: "T", body: "Body", hashtags: [], notes: "" }]
+  };
+  const receipt = { provider: "openai", requestedModel: "m", servedModel: "m", promptVersion: "p", at: "2026-08-01T00:00:00.000Z" };
+
+  const thin = createPostFromGeneration({ topic: "Old laptops in closets", platforms: ["reddit"] }, generation, receipt);
+  assert.equal(thin.campaign, "Closet Audit");
+  assert.equal(thin.audience, "Bay Area neighbors with unused electronics");
+  assert.equal(thin.topic, "Old laptops in closets");
+  assert.deepEqual(thin.derived.sort(), ["audience", "campaign", "objective"],
+    "every field the operator left blank is marked as the model's own reading");
+
+  const detailed = createPostFromGeneration(
+    { topic: "Old laptops", campaign: "Back to school", audience: "Teachers", platforms: ["reddit"] },
+    generation, receipt
+  );
+  assert.equal(detailed.campaign, "Back to school", "what the operator typed always wins");
+  assert.equal(detailed.audience, "Teachers");
+  assert.deepEqual(detailed.derived, ["objective"], "only the field left blank is attributed to the model");
+});
+
+/* ------------------------------------------------------------
+   DRAFT HISTORY
+   ------------------------------------------------------------ */
+
+test("a snapshot is a copy, so later edits cannot rewrite what an earlier draft said", () => {
+  const post = {
+    campaign: "C", canonical: "First shared message",
+    ai: { provider: "openai", servedModel: "m", warnings: [] },
+    variants: [{ id: "v1", platform: "reddit", title: "T", body: "First body", aiBody: "First body", hashtags: ["One"], notes: "", status: "draft" }],
+    generations: []
+  };
+
+  const snapshot = snapshotGeneration(post, { note: "Replaced by a re-run" });
+  post.canonical = "Rewritten";
+  post.variants[0].body = "Second body";
+  post.variants[0].hashtags.push("Two");
+  post.ai.warnings.push("later");
+
+  assert.equal(snapshot.canonical, "First shared message");
+  assert.equal(snapshot.variants[0].body, "First body");
+  assert.deepEqual(snapshot.variants[0].hashtags, ["One"]);
+  assert.deepEqual(snapshot.ai.warnings, [], "the receipt is copied with the text it belongs to");
+  assert.equal(snapshot.variants[0].variantId, "v1", "restoring has to know which version it came from");
+});
+
+test("draft history keeps the newest versions and is bounded", () => {
+  const post = { campaign: "C", canonical: "c", ai: null, variants: [], generations: [] };
+  for (let index = 0; index < DRAFT_HISTORY_LIMIT + 4; index += 1) {
+    pushGeneration(post, snapshotGeneration(post, { note: `run ${index}` }));
+  }
+  assert.equal(post.generations.length, DRAFT_HISTORY_LIMIT);
+  assert.equal(post.generations[0].note, `run ${DRAFT_HISTORY_LIMIT + 3}`, "newest first");
+
+  /* And it survives a round trip through the gist. */
+  const data = migrateData({ ...createDefaultData(), posts: [{ id: "p1", variants: [], generations: post.generations }] });
+  assert.equal(data.posts[0].generations.length, DRAFT_HISTORY_LIMIT);
+  assert.deepEqual(validateData(data), []);
 });

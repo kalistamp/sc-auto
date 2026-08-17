@@ -18,8 +18,9 @@ import { APP_PASSKEY, BUILD } from "./config.js";
 import {
   STATUS_LABELS,
   addActivity, addRun, allVariants, countsFor, createDefaultData, createExternalPost,
-  createPostFromGeneration, derivePostStatus, findSimilarPosts, getPlatform, listPlatforms,
-  migrateData, normalizePlatform, nowIso, platformKeys, setActivePlatforms, splitTags,
+  createPostFromGeneration, derivePostStatus, findSimilarPosts, getPlatform, isOverdue,
+  isQueued, isScheduled, listPlatforms, migrateData, normalizePlatform, nowIso, platformKeys,
+  pushGeneration, setActivePlatforms, snapshotGeneration, splitTags, textSimilarity,
   uniquePlatformKey, validateData
 } from "./data.js";
 import { buildCopyText, platformHomeUrl, platformLabel, variantChecks } from "./platforms.js";
@@ -44,6 +45,7 @@ const state = {
   view: "overview",
   postId: "",
   generating: false,
+  rerunning: false,
   abort: null,
   filters: { q: "", status: "all", platform: "all" },
   prefs: readPrefs(),
@@ -87,7 +89,11 @@ function boot() {
   workspace.onStatus(paintSyncState);
 
   const draft = readDraftBrief();
-  if (draft) state.brief = { ...emptyBrief(), ...draft };
+  if (draft) {
+    state.brief = { ...emptyBrief(), ...draft };
+    /* A brief saved by an older build has the topic under its old name. */
+    state.brief.topic ||= draft.keyMessage || "";
+  }
 
   if (session.unlocked) enterStudio({ silent: true });
   else el("#passkey")?.focus();
@@ -388,7 +394,9 @@ function paintNav() {
   const queue = el("#count-queue");
   library.textContent = counts.needsReview ? String(counts.needsReview) : "";
   library.className = `nav-count${counts.needsReview ? " is-hot" : ""}`;
-  queue.textContent = counts.scheduled ? String(counts.scheduled) : "";
+  /* Everything the Queue page lists, dated or not — the badge and that
+     page have to agree on what "in the queue" means. */
+  queue.textContent = counts.queued ? String(counts.queued) : "";
   queue.className = `nav-count${counts.overdue ? " is-hot" : ""}`;
 }
 
@@ -410,7 +418,7 @@ function renderOverview() {
   const needsReview = data.posts.filter((post) => derivePostStatus(post) === "review")
     .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
   const upNext = allVariants(data)
-    .filter(({ variant }) => variant.scheduledAt && variant.status !== "published")
+    .filter(({ variant }) => isScheduled(variant))
     .sort((a, b) => Date.parse(a.variant.scheduledAt) - Date.parse(b.variant.scheduledAt))
     .slice(0, 5);
   const lastRun = data.runs[0];
@@ -427,7 +435,7 @@ function renderOverview() {
     <div class="stat-row">
       ${statTile("Needs review", counts.needsReview, "Drafts waiting on you", { hot: counts.needsReview > 0, nav: "library", filter: "review" })}
       ${statTile("Approved", counts.approved, "Ready to post", { nav: "queue" })}
-      ${statTile("Scheduled", counts.scheduled, counts.overdue ? `${counts.overdue} past due` : "On the calendar", { hot: counts.overdue > 0, nav: "queue" })}
+      ${statTile("Scheduled", counts.scheduled, counts.overdue ? `${counts.overdue} past due` : "Has a date on it", { hot: counts.overdue > 0, nav: "queue" })}
       ${statTile("Published", counts.published, "Recorded posts", { nav: "library", filter: "published" })}
     </div>
 
@@ -557,7 +565,7 @@ function postRow(post) {
   return `<button class="row" type="button" data-act="open-post" data-post="${esc(post.id)}">
     <span class="row-main">
       <span class="row-title">${esc(post.campaign)}</span>
-      <span class="row-sub">${esc(firstLine(post.canonical || post.keyMessage) || "No copy yet")}</span>
+      <span class="row-sub">${esc(firstLine(post.canonical || post.topic || post.keyMessage) || "No copy yet")}</span>
       <span class="row-meta">${pips(post.variants)}<span class="badge ${status}">${esc(STATUS_LABELS[status])}</span></span>
     </span>
     <span class="row-side"><span class="stamp">${relTime(post.updatedAt)}</span></span>
@@ -565,7 +573,7 @@ function postRow(post) {
 }
 
 function queueRow({ post, variant }) {
-  const late = Date.parse(variant.scheduledAt) < Date.now();
+  const late = isOverdue(variant);
   return `<button class="row" type="button" data-act="open-post" data-post="${esc(post.id)}">
     <span class="row-main">
       <span class="row-title">${esc(post.campaign)}</span>
@@ -586,13 +594,14 @@ function renderCompose() {
   const meta = PROVIDERS[credentials.provider];
   const ready = Boolean(credentials.keys[credentials.provider]);
   const brief = state.brief;
+  const ideas = topicSuggestions();
 
   return `
     <section class="page-head">
       <div class="page-head-main">
         <p class="eyebrow">Draft</p>
-        <h2>Write the brief, not the post</h2>
-        <p class="lede">Everything below is context for the model. It can rephrase what you give it; it cannot authorize a new claim, so anything that must appear has to be in here or in your approved facts.</p>
+        <h2>Say what it is about. That is the whole brief.</h2>
+        <p class="lede">One line is enough. The studio fills in the campaign name, the audience, and the goal from your organization profile, and tells you what it assumed. Add detail below only when you want to overrule it.</p>
       </div>
     </section>
 
@@ -600,26 +609,19 @@ function renderCompose() {
       <form class="card" id="brief-form">
         <div class="form-step">
           <h3><span class="step-num">01</span> What is this about?</h3>
-          <p>The parts a person would need to write the post themselves.</p>
-          <div class="form-grid">
-            <div class="field">
-              <label for="b-campaign">Campaign name</label>
-              <input class="input" id="b-campaign" name="campaign" maxlength="100" placeholder="Back-to-school collection" value="${esc(brief.campaign)}">
-            </div>
-            <div class="field">
-              <label for="b-audience">Audience</label>
-              <input class="input" id="b-audience" name="audience" maxlength="180" placeholder="Bay Area neighbors with unused electronics" value="${esc(brief.audience)}" required>
-            </div>
-            <div class="field full">
-              <label for="b-objective">What should this accomplish?</label>
-              <input class="input" id="b-objective" name="objective" maxlength="220" placeholder="Collect repairable laptops before the school year" value="${esc(brief.objective)}" required>
-            </div>
-            <div class="field full">
-              <label for="b-key">Key message</label>
-              <textarea class="textarea" id="b-key" name="keyMessage" maxlength="1200" placeholder="Old laptops sitting in closets can become computers for local students." required>${esc(brief.keyMessage)}</textarea>
-              <p class="hint">Include any event, neighborhood, deadline, or item type that has to be mentioned.</p>
-            </div>
+          <p>A sentence. A phrase. Whatever you would say to a colleague across the room.</p>
+          <div class="field">
+            <label class="sr-only" for="b-topic">What is this about?</label>
+            <textarea class="textarea" id="b-topic" name="topic" maxlength="1200" rows="2"
+                      placeholder="Old laptops in closets could be computers for local students" required>${esc(brief.topic)}</textarea>
           </div>
+          ${ideas.length ? `
+            <p class="hint chips-lead">Or start from one of these:</p>
+            <div class="chips">
+              ${ideas.map((idea) => `
+                <button class="chip" type="button" data-act="use-topic" data-topic="${esc(idea.value)}"
+                        title="${esc(idea.value)}">${esc(idea.label)}</button>`).join("")}
+            </div>` : ""}
         </div>
 
         <div class="form-step">
@@ -643,34 +645,54 @@ function renderCompose() {
         </div>
 
         <div class="form-step">
-          <h3><span class="step-num">03</span> Anything else?</h3>
-          <p>Optional. Leave these alone and the studio uses your saved defaults.</p>
-          <div class="form-grid">
-            <div class="field">
-              <label for="b-cta">Call to action</label>
-              <input class="input" id="b-cta" name="cta" maxlength="240" value="${esc(brief.cta || state.data.organization.defaultCta)}">
+          <details class="more" ${detailFilled(brief) ? "open" : ""}>
+            <summary>
+              <h3><span class="step-num">03</span> Add detail</h3>
+              <span class="more-note">${detailFilled(brief) ? "In use" : "Optional — the model works these out"}</span>
+              ${icon("chevron", "more-mark")}
+            </summary>
+            <div class="more-body">
+              <div class="form-grid">
+                <div class="field full">
+                  <label for="b-must">Must include, word for word</label>
+                  <input class="input" id="b-must" name="mustInclude" maxlength="300" placeholder="Saturday drop-off at the Berkeley library, 10am to 2pm" value="${esc(brief.mustInclude)}">
+                  <p class="hint">A phrase, date, or detail every draft has to carry. Only things you can stand behind.</p>
+                </div>
+                <div class="field">
+                  <label for="b-campaign">Campaign name</label>
+                  <input class="input" id="b-campaign" name="campaign" maxlength="100" placeholder="The model names it" value="${esc(brief.campaign)}">
+                </div>
+                <div class="field">
+                  <label for="b-audience">Audience</label>
+                  <input class="input" id="b-audience" name="audience" maxlength="180" placeholder="The model reads it from your profile" value="${esc(brief.audience)}">
+                </div>
+                <div class="field full">
+                  <label for="b-objective">What should this accomplish?</label>
+                  <input class="input" id="b-objective" name="objective" maxlength="220" placeholder="The model infers it from the topic" value="${esc(brief.objective)}">
+                </div>
+                <div class="field">
+                  <label for="b-cta">Call to action</label>
+                  <input class="input" id="b-cta" name="cta" maxlength="240" value="${esc(brief.cta || state.data.organization.defaultCta)}">
+                </div>
+                <div class="field">
+                  <label for="b-tone">Tone</label>
+                  <select class="input" id="b-tone" name="tone">
+                    ${["Neighborly and direct", "Warm and hopeful", "Educational and reassuring", "Urgent but not pushy", "Partnership-focused"]
+                      .map((tone) => `<option ${brief.tone === tone ? "selected" : ""}>${esc(tone)}</option>`).join("")}
+                  </select>
+                </div>
+                <div class="field">
+                  <label for="b-when">Target date</label>
+                  <input class="input" id="b-when" name="scheduledAt" type="datetime-local" value="${esc(toLocalInput(brief.scheduledAt))}">
+                  <p class="hint">Puts it in the Queue once you approve it. Nothing posts on a timer.</p>
+                </div>
+                <div class="field">
+                  <label for="b-tags">Tags</label>
+                  <input class="input" id="b-tags" name="tags" maxlength="160" placeholder="laptops, back-to-school" value="${esc(brief.tags)}">
+                </div>
+              </div>
             </div>
-            <div class="field">
-              <label for="b-tone">Tone</label>
-              <select class="input" id="b-tone" name="tone">
-                ${["Neighborly and direct", "Warm and hopeful", "Educational and reassuring", "Urgent but not pushy", "Partnership-focused"]
-                  .map((tone) => `<option ${brief.tone === tone ? "selected" : ""}>${esc(tone)}</option>`).join("")}
-              </select>
-            </div>
-            <div class="field">
-              <label for="b-when">Target date</label>
-              <input class="input" id="b-when" name="scheduledAt" type="datetime-local" value="${esc(toLocalInput(brief.scheduledAt))}">
-            </div>
-            <div class="field">
-              <label for="b-tags">Tags</label>
-              <input class="input" id="b-tags" name="tags" maxlength="160" placeholder="laptops, back-to-school" value="${esc(brief.tags)}">
-            </div>
-            <div class="field full">
-              <label for="b-must">Must include</label>
-              <input class="input" id="b-must" name="mustInclude" maxlength="300" placeholder="Saturday drop-off at the Berkeley library, 10am to 2pm" value="${esc(brief.mustInclude)}">
-              <p class="hint">A phrase, date, or detail the drafts have to carry. Only add things you can stand behind.</p>
-            </div>
-          </div>
+          </details>
         </div>
 
         <div class="generate-bar">
@@ -681,7 +703,7 @@ function renderCompose() {
             ? `<button class="btn btn-ghost" type="button" data-act="cancel-generate">Cancel</button>`
             : ""}
           <p>${ready
-            ? "Output lands in review. Nothing is published, scheduled, or sent anywhere."
+            ? "Output lands in review, where you can edit it, re-run it, and compare versions. Nothing is published or sent anywhere."
             : "Add a model API key under Cloud sync before generating."}</p>
         </div>
       </form>
@@ -697,7 +719,7 @@ function renderCompose() {
 
         <div class="aside-card">
           <h3>What the model may say</h3>
-          <p>Only your approved facts and what you type into this brief. It will not invent a number, a partner, or a person.</p>
+          <p>Only your approved facts and what you type into this brief. It fills in the framing — who this is for, what it is called — and says so on the draft. It will not invent a number, a partner, or a person.</p>
           <ul class="tip-list">
             <li>${icon("check")}<span>${plural(state.data.organization.facts.length, "approved fact")} on record</span></li>
             <li>${icon("check")}<span>${plural(state.data.organization.prohibitedClaims.length, "standing rule")}</span></li>
@@ -711,21 +733,32 @@ function renderCompose() {
 
 function emptyBrief() {
   return {
-    campaign: "", objective: "", audience: "", keyMessage: "",
+    topic: "", campaign: "", objective: "", audience: "", keyMessage: "",
     cta: "", tone: "Neighborly and direct", scheduledAt: "", tags: "", mustInclude: "",
     platforms: ["reddit", "facebook", "nextdoor"]
   };
+}
+
+/* Whether the optional section is holding anything, so it opens itself
+   rather than hiding a value the operator typed on a previous visit. */
+function detailFilled(brief) {
+  return Boolean(brief.campaign || brief.audience || brief.objective || brief.mustInclude
+    || brief.scheduledAt || brief.tags);
 }
 
 function readBriefForm() {
   const form = el("#brief-form");
   if (!form) return state.brief;
   const values = new FormData(form);
+  /* The optional block lives in a <details>. A closed <details> still
+     submits its fields, which is what keeps this one read of the form
+     honest whether it is open or shut. */
   return {
+    ...state.brief,
+    topic: (values.get("topic") || "").trim(),
     campaign: (values.get("campaign") || "").trim(),
     objective: (values.get("objective") || "").trim(),
     audience: (values.get("audience") || "").trim(),
-    keyMessage: (values.get("keyMessage") || "").trim(),
     cta: (values.get("cta") || "").trim(),
     tone: values.get("tone") || "Neighborly and direct",
     scheduledAt: fromLocalInput(values.get("scheduledAt")),
@@ -733,6 +766,49 @@ function readBriefForm() {
     mustInclude: (values.get("mustInclude") || "").trim(),
     platforms: values.getAll("platform")
   };
+}
+
+/* ------------------------------------------------------------
+   ONE-CLICK STARTERS
+
+   The point of the whole screen is that a post should cost a sentence,
+   and the cheapest sentence is one you did not have to think of. These
+   come from the organization's own approved facts — each fact is
+   already a thing worth telling people, written in language the
+   operator signed off on — plus a few standing asks every collection
+   drive has.
+
+   Anything that reads like something already in the library is dropped:
+   suggesting last week's post back to its author is worse than
+   suggesting nothing.
+   ------------------------------------------------------------ */
+
+const STANDING_IDEAS = [
+  "A reminder that pickup is free and how to book one",
+  "What happens to the data on a donated device",
+  "The full list of what we take, working or broken"
+];
+
+function topicSuggestions() {
+  const facts = (state.data.organization.facts || []).map((fact) => firstLine(fact).replace(/\s+/g, " ").trim());
+  const recent = state.data.posts.slice(0, 12).map((post) => post.topic || post.canonical || "");
+
+  /* The standing asks lead, because they are shaped like posts; the
+     facts fill the rest of the row. Nothing is offered twice, and
+     nothing is offered that reads like a chip already on the row or a
+     post already in the library — a row of five near-identical ideas is
+     no more use than one. */
+  const chosen = [];
+  for (const idea of [...STANDING_IDEAS, ...facts]) {
+    if (!idea || chosen.length >= 5) continue;
+    const tooClose = [...chosen, ...recent].some((other) => textSimilarity(idea, other) > 0.5);
+    if (!tooClose) chosen.push(idea);
+  }
+
+  /* The chip is elided to keep the row readable; what it puts in the
+     box is the whole thing. Inserting the elided text would send the
+     model a sentence ending in an ellipsis. */
+  return chosen.map((idea) => ({ value: idea, label: idea.length > 76 ? `${idea.slice(0, 73).trimEnd()}…` : idea }));
 }
 
 async function runGeneration() {
@@ -747,8 +823,10 @@ async function runGeneration() {
   writeDraftBrief(brief);
 
   if (!brief.platforms.length) return toast("Pick at least one platform.", { kind: "error" });
-  if (!brief.objective || !brief.audience || !brief.keyMessage) {
-    return toast("Objective, audience, and key message are all needed.", { kind: "error" });
+  /* The only thing the model cannot work out for itself. */
+  if (!brief.topic) {
+    el("#b-topic")?.focus();
+    return toast("Say what the post is about — a sentence is enough.", { kind: "error" });
   }
 
   const credentials = readCredentials();
@@ -813,7 +891,7 @@ async function runGeneration() {
       at: started, status: "failed",
       provider: credentials.provider, requestedModel: credentials.models[credentials.provider], servedModel: "",
       promptVersion: PROMPT_VERSION, latencyMs: 0, usage: null, responseId: "",
-      platforms: brief.platforms, postId: "", campaign: brief.campaign || "(untitled)",
+      platforms: brief.platforms, postId: "", campaign: brief.campaign || firstLine(brief.topic) || "(untitled)",
       error: error.message
     });
     commit();
@@ -824,7 +902,7 @@ async function runGeneration() {
   }
 }
 
-function openErrorDialog(error) {
+function openErrorDialog(error, { rerun = false } = {}) {
   openModal(`
     <div class="modal-inner">
       <div class="modal-head">
@@ -836,12 +914,14 @@ function openErrorDialog(error) {
       </div>
       <div class="modal-scroll">
         ${error.hint ? `<div class="notice is-warn">${icon("alert")}<span>${esc(error.hint)}</span></div>` : ""}
-        <p class="hint" style="margin-top:.9rem">Your brief is still on the form — nothing was lost. This attempt is recorded in Model runs.</p>
+        <p class="hint">${rerun
+          ? "The drafts you already had are untouched, and nothing was added to the history. This attempt is recorded in Model runs."
+          : "Your brief is still on the form — nothing was lost. This attempt is recorded in Model runs."}</p>
       </div>
       <div class="modal-foot">
         <button class="btn btn-ghost" type="button" data-act="sync-settings">${icon("gear")} Cloud sync</button>
         <span class="spacer"></span>
-        <button class="btn btn-primary" type="button" data-close>Back to the brief</button>
+        <button class="btn btn-primary" type="button" data-close>${rerun ? "Back to the draft" : "Back to the brief"}</button>
       </div>
     </div>`);
 }
@@ -856,7 +936,7 @@ function renderLibrary() {
 
   const posts = state.data.posts
     .filter((post) => {
-      const haystack = [post.campaign, post.objective, post.audience, post.keyMessage, post.canonical,
+      const haystack = [post.campaign, post.topic, post.objective, post.audience, post.keyMessage, post.canonical,
         ...(post.tags || []), ...post.variants.map((v) => `${v.title} ${v.body} ${v.publishedUrl}`)]
         .join(" ").toLowerCase();
       const statusOk = status === "all" || derivePostStatus(post) === status;
@@ -931,7 +1011,7 @@ function postCard(post) {
       <span class="badge ${status}">${esc(STATUS_LABELS[status])}</span>
     </span>
     <h3>${esc(post.campaign)}</h3>
-    <p>${esc(post.canonical || post.keyMessage || "No copy yet")}</p>
+    <p>${esc(post.canonical || post.topic || post.keyMessage || "No copy yet")}</p>
     <span class="post-card-foot">
       ${post.source === "external"
         ? `<span class="badge external">${icon("link")} Recorded</span>`
@@ -955,7 +1035,7 @@ function pips(variants) {
 
 function renderQueue() {
   const items = allVariants(state.data)
-    .filter(({ variant }) => variant.status !== "published" && (variant.scheduledAt || variant.status === "approved"))
+    .filter(({ variant }) => isQueued(variant))
     .sort((a, b) => {
       const left = a.variant.scheduledAt ? Date.parse(a.variant.scheduledAt) : Infinity;
       const right = b.variant.scheduledAt ? Date.parse(b.variant.scheduledAt) : Infinity;
@@ -1005,7 +1085,7 @@ function renderQueue() {
 
 function queueItem({ post, variant }) {
   const meta = getPlatform(variant.platform);
-  const late = variant.scheduledAt && Date.parse(variant.scheduledAt) < Date.now();
+  const late = isOverdue(variant);
   return `<button class="queue-item${late ? " is-late" : ""}" type="button" style="--platform:${meta?.color}" data-act="open-post" data-post="${esc(post.id)}">
     <span class="pip" style="background:${meta?.color}">${esc((meta?.label || "?")[0])}</span>
     <span class="row-main">
@@ -1176,7 +1256,7 @@ function renderEditor() {
         <button class="crumb" type="button" data-nav="library">${icon("chevron", "")} Library</button>
         <h2>${esc(post.campaign)}</h2>
         <p class="lede">${esc(post.objective || "Review each platform version, approve it, then publish it yourself.")}</p>
-        <div class="row-meta" style="margin-top:.6rem">
+        <div class="row-meta">
           <span class="badge ${status}">${esc(STATUS_LABELS[status])}</span>
           ${post.source === "external" ? `<span class="badge external">${icon("link")} Recorded from platform</span>` : receiptChip(post.ai)}
           <span class="stamp">Updated ${relTime(post.updatedAt)}</span>
@@ -1185,32 +1265,26 @@ function renderEditor() {
     </section>
 
     <div class="split">
-      <div>
+      <div class="editor-main">
         ${post.ai.warnings.length ? `
-          <ul class="notes" style="margin-top:0">
+          <ul class="notes">
             ${post.ai.warnings.map((note) => `<li>${icon("alert")}<span>${esc(note)}</span></li>`).join("")}
           </ul>` : ""}
 
-        <div class="canonical">
-          <div class="field">
-            <label for="canonical">Shared message</label>
-            <textarea class="textarea" id="canonical" data-post-field="canonical" placeholder="The message all platforms share">${esc(post.canonical)}</textarea>
-            <p class="hint">Not published anywhere. It is the reference the platform versions are written from, and edits here save automatically.</p>
-          </div>
-        </div>
+        ${canonicalCard(post)}
 
         ${post.variants.map((variant) => variantCard(post, variant)).join("")}
       </div>
 
-      <aside>
+      <aside class="editor-side">
         ${briefCard(post)}
 
-        <div class="card" style="margin-top:1rem">
+        <div class="card">
           <div class="card-body">
             <div class="btn-row">
               <button class="btn btn-soft btn-block" type="button" data-act="approve-all">${icon("check")} Approve every draft</button>
             </div>
-            <div class="btn-row" style="margin-top:.5rem">
+            <div class="btn-row btn-row-tight">
               <button class="btn btn-ghost btn-sm" type="button" data-act="duplicate">${icon("copy")} Duplicate</button>
               <button class="btn btn-ghost btn-sm" type="button" data-act="export-post">${icon("download")} Export</button>
               <button class="btn btn-ghost btn-sm" type="button" data-act="archive">${icon("archive")} ${post.status === "archived" ? "Restore" : "Archive"}</button>
@@ -1222,16 +1296,60 @@ function renderEditor() {
     </div>`;
 }
 
+/* THE SHARED MESSAGE, and the two buttons that make it worth editing.
+
+   It reads like a system prompt, and after this change it behaves like
+   one: edit it, press Re-run drafts, and every platform version is
+   rewritten from it. That is only safe because the run before it is
+   kept — see snapshotGeneration in js/data.js — so History is next to
+   the button rather than buried in a menu. */
+function canonicalCard(post) {
+  const versions = generationCount(post);
+  const rerunnable = post.variants.some((variant) => variant.status !== "published");
+
+  return `<section class="card canonical">
+    <header class="card-head">
+      <div>
+        <h3>Shared message</h3>
+        <p>The spine every platform version is written from. Never published anywhere itself.</p>
+      </div>
+      <span class="spacer"></span>
+      <button class="btn btn-quiet btn-sm" type="button" data-act="draft-history">
+        ${icon("history")} History${versions ? ` <span class="count-pip">${versions}</span>` : ""}
+      </button>
+      <button class="btn btn-soft btn-sm" type="button" data-act="rerun-drafts" ${rerunnable && !state.rerunning ? "" : "disabled"}
+              title="${rerunnable ? "Rewrite every unpublished version from this message" : "Every version here is published, so there is nothing to rewrite"}">
+        ${state.rerunning ? `<span class="spinner"></span> Re-running…` : `${icon("refresh")} Re-run drafts`}
+      </button>
+    </header>
+    <div class="card-body">
+      <div class="field">
+        <label class="sr-only" for="canonical">Shared message</label>
+        <textarea class="textarea" id="canonical" data-post-field="canonical"
+                  placeholder="The message all platforms share">${esc(post.canonical)}</textarea>
+        <p class="hint">Edit this and press <strong>Re-run drafts</strong> to rewrite the platform versions from it. Every run is kept, so you can compare them and go back to the one you liked. Edits here save on their own.</p>
+      </div>
+    </div>
+  </section>`;
+}
+
 /* Only the rows that carry something. A column of "Not recorded" reads
    like missing data when in fact a hand-recorded post simply never had
-   a brief. */
+   a brief.
+
+   A row the MODEL filled in says so. The brief is one line now, and the
+   rest of it is the model's reading of that line — presenting its guess
+   at the audience in the same voice as something the operator typed
+   would be the app quietly putting words in their mouth. */
 function briefCard(post) {
+  const derived = new Set(post.derived || []);
   const rows = [
-    ["Audience", post.audience],
-    ["Key message", post.keyMessage],
-    ["Tags", (post.tags || []).map((tag) => `#${tag}`).join(" ")],
-    ["Created", fmtDateTime(post.createdAt)],
-    ["Account", post.variants.map((variant) => variant.account).find(Boolean) || ""]
+    ["Topic", post.topic || post.keyMessage, false],
+    ["Audience", post.audience, derived.has("audience")],
+    ["Goal", post.objective, derived.has("objective")],
+    ["Tags", (post.tags || []).map((tag) => `#${tag}`).join(" "), false],
+    ["Created", fmtDateTime(post.createdAt), false],
+    ["Account", post.variants.map((variant) => variant.account).find(Boolean) || "", false]
   ].filter(([, value]) => value);
 
   return `<div class="card">
@@ -1243,8 +1361,12 @@ function briefCard(post) {
     </header>
     <div class="card-body">
       <dl class="detail-list">
-        ${rows.map(([label, value]) => `<div class="detail"><dt>${esc(label)}</dt><dd>${esc(value)}</dd></div>`).join("")}
+        ${rows.map(([label, value, guessed]) => `<div class="detail">
+          <dt>${esc(label)}${guessed ? `<span class="dt-tag" title="You left this blank, so the model filled it in from your organization profile">model's read</span>` : ""}</dt>
+          <dd>${esc(value)}</dd>
+        </div>`).join("")}
       </dl>
+      ${derived.size ? `<p class="hint">Blank fields are filled in by the model and can be overruled on the next brief.</p>` : ""}
     </div>
   </div>`;
 }
@@ -1252,10 +1374,6 @@ function briefCard(post) {
 function variantCard(post, variant) {
   const meta = getPlatform(variant.platform);
   const published = variant.status === "published";
-  /* Shown whenever there is a model original at all, not only once the
-     text has diverged: typing does not rebuild this row, so a
-     conditional button would stay missing until the next navigation. */
-  const hasOriginal = Boolean(variant.aiBody);
 
   return `<article class="variant${published ? " is-published" : ""}" id="v-${esc(variant.id)}">
     <header class="variant-head">
@@ -1280,29 +1398,25 @@ function variantCard(post, variant) {
         <div id="meta-${esc(variant.id)}">${variantMeta(variant)}</div>
       </div>
 
-      <div class="form-grid">
-        <div class="field">
-          <label for="h-${esc(variant.id)}">Hashtags</label>
-          <input class="input" id="h-${esc(variant.id)}" data-variant="${esc(variant.id)}" data-field="hashtags"
-                 value="${esc((variant.hashtags || []).join(", "))}" placeholder="comma separated" ${published ? "readonly" : ""}>
-        </div>
-        <div class="field">
-          <label for="s-${esc(variant.id)}">Planned date</label>
-          <input class="input" id="s-${esc(variant.id)}" type="datetime-local" data-variant="${esc(variant.id)}" data-field="scheduledAt"
-                 value="${esc(toLocalInput(variant.scheduledAt))}" ${published ? "readonly" : ""}>
-        </div>
+      <div class="field">
+        <label for="h-${esc(variant.id)}">Hashtags</label>
+        <input class="input" id="h-${esc(variant.id)}" data-variant="${esc(variant.id)}" data-field="hashtags"
+               value="${esc((variant.hashtags || []).join(", "))}" placeholder="ewaste, bayarea" ${published ? "readonly" : ""}>
+        <p class="hint">Commas here; the studio adds the # and puts them at the end of the post below.</p>
+      </div>
+
+      ${readyBlock(variant, meta)}
+
+      <div class="field">
+        <label for="s-${esc(variant.id)}">Planned date</label>
+        <input class="input" id="s-${esc(variant.id)}" type="datetime-local" data-variant="${esc(variant.id)}" data-field="scheduledAt"
+               value="${esc(toLocalInput(variant.scheduledAt))}" ${published ? "readonly" : ""}>
+        <p class="hint">A reminder for you. It puts this in the Queue; nothing posts on a timer.</p>
       </div>
 
       ${variant.notes ? `<ul class="notes is-info"><li>${icon("info")}<span>${esc(variant.notes)}</span></li></ul>` : ""}
 
       <div class="actions">
-        <button class="btn btn-ghost btn-sm" type="button" data-act="copy" data-variant="${esc(variant.id)}">${icon("copy")} Copy</button>
-        <button class="btn btn-ghost btn-sm" type="button" data-act="open-platform" data-variant="${esc(variant.id)}"
-                title="Copies the post, then opens ${esc(meta.label)} so you can log in and paste it">
-          ${icon("external")} ${meta.homeUrl ? `Open ${esc(meta.label)}` : "Copy for pasting"}
-        </button>
-        ${hasOriginal ? `<button class="btn btn-quiet btn-sm" type="button" data-act="show-original" data-variant="${esc(variant.id)}">${icon("history")} Model's original</button>` : ""}
-        <span class="spacer"></span>
         ${published
           ? `<button class="btn btn-ghost btn-sm" type="button" data-act="publish" data-variant="${esc(variant.id)}">${icon("pencil")} Edit record</button>`
           : `
@@ -1312,6 +1426,7 @@ function variantCard(post, variant) {
             ${variant.status !== "draft" ? `<button class="btn btn-ghost btn-sm" type="button" data-act="schedule" data-variant="${esc(variant.id)}">
               ${icon("calendar")} ${variant.status === "scheduled" ? "Reschedule" : "Schedule"}
             </button>` : ""}
+            <span class="spacer"></span>
             <button class="btn btn-copper btn-sm" type="button" data-act="publish" data-variant="${esc(variant.id)}">
               ${icon("check-circle")} Mark published
             </button>`}
@@ -1327,6 +1442,59 @@ function variantCard(post, variant) {
         <div class="published-link">${icon("check")}<span>Published ${esc(fmtDateTime(variant.publishedAt))} — no link recorded</span></div>` : ""}
     </div>
   </article>`;
+}
+
+/* THE POST, EXACTLY AS IT WILL BE PASTED.
+
+   Hashtags are typed as a comma-separated list because that is the sane
+   way to edit them, but they are PUBLISHED as "#one #two" at the end of
+   the post — and nothing on the page used to show that, so the copy
+   button's output was a surprise. This block is the resolution: it is
+   built by the same buildCopyText() that fills the clipboard and that
+   gets frozen as publishedBody, so what is shown here cannot drift from
+   what is copied.
+
+   It also carries the one copy button. There used to be three overlapping
+   controls at the bottom of the card — Copy, "Copy for pasting" (the
+   Open button with no link to open), and "Model's original" — and no way
+   to tell from the labels which one put the post on the clipboard.
+   Now: one primary Copy post, here, against the text it copies. */
+function readyBlock(variant, meta) {
+  return `<section class="ready" aria-label="Ready to paste">
+    <header class="ready-head">
+      <div>
+        <h4>${icon("check-circle")} Ready to paste</h4>
+        <small>Post copy and hashtags together — exactly what the button gives you</small>
+      </div>
+      <span class="spacer"></span>
+      <button class="btn btn-primary btn-sm" type="button" data-act="copy" data-variant="${esc(variant.id)}">
+        ${icon("copy")} Copy post
+      </button>
+    </header>
+    <div id="ready-${esc(variant.id)}">${readyBody(variant, meta)}</div>
+  </section>`;
+}
+
+/* Patched on every keystroke, so it is deliberately the only part that
+   changes: rebuilding the header would take the copy button out from
+   under the pointer mid-click.
+
+   The second button goes somewhere rather than doing the same thing
+   under another name — and it only exists when there is somewhere to
+   go. A platform with no link (the neutral "Any platform", or one just
+   added) shows the copy button alone. */
+function readyBody(variant, meta) {
+  const text = buildCopyText(variant);
+  return `
+    <pre class="ready-text">${esc(text) || `<span class="muted">Nothing to copy yet.</span>`}</pre>
+    <footer class="ready-foot">
+      <span class="stamp">${plural(text.length, "character")}</span>
+      <span class="spacer"></span>
+      ${meta.homeUrl ? `<button class="btn btn-quiet btn-sm" type="button" data-act="open-platform" data-variant="${esc(variant.id)}"
+              title="Copies this post, then opens ${esc(meta.label)} in a new tab so you can log in and paste it">
+        ${icon("external")} Open ${esc(meta.label)}
+      </button>` : ""}
+    </footer>`;
 }
 
 /* Everything under a body textarea that has to update while typing.
@@ -2170,34 +2338,301 @@ function openExternalDialog() {
     </form>`);
 }
 
-function openOriginalDialog(variantId) {
-  const { variant } = findVariant(variantId);
-  if (!variant) return;
-  const unchanged = variant.body.trim() === variant.aiBody.trim();
+/* ------------------------------------------------------------
+   DRAFT HISTORY
+
+   Re-running is only usable if the previous attempt survives it, and
+   "which one did I like most" is a question you answer by reading them
+   side by side. So this dialog lists every stored generation newest
+   first, with the current text at the top for comparison and a restore
+   on each older one.
+
+   The oldest entry is synthesized rather than stored: a post that has
+   never been re-run still has the model's untouched first output in
+   `aiBody`, and that used to be reachable behind a per-platform
+   "Model's original" button. That button is gone; this is where it
+   lives now, so there is one place to look for earlier text instead of
+   two that sounded alike.
+   ------------------------------------------------------------ */
+
+function generationEntries(post) {
+  const stored = (post.generations || []).map((entry) => ({ ...entry, kind: "saved" }));
+
+  /* One entry is not stored but derived: the current generation as the
+     model wrote it, before the operator typed over it. It is only worth
+     listing where the two differ — otherwise it is the current draft
+     twice — and it belongs at the top, because it is a version of the
+     text that is on screen now rather than of one that was replaced.
+
+     Restoring it is what the old per-platform "Model's original" button
+     did, which is why that button could be removed. */
+  const edited = post.variants.filter((variant) => variant.aiBody && variant.aiBody.trim() !== variant.body.trim());
+  if (!edited.length) return stored;
+
+  return [{
+    id: "original",
+    kind: "original",
+    at: post.ai?.at || post.createdAt,
+    note: "As generated, before your edits",
+    ai: post.ai,
+    canonical: "",
+    variants: edited.map((variant) => ({
+      variantId: variant.id, platform: variant.platform, title: variant.title,
+      body: variant.aiBody, aiBody: variant.aiBody, hashtags: [...(variant.hashtags || [])],
+      notes: "", status: "draft"
+    }))
+  }, ...stored];
+}
+
+function generationCount(post) {
+  return generationEntries(post).length;
+}
+
+function openDraftHistoryDialog() {
+  const post = currentPost();
+  if (!post) return;
+  const entries = generationEntries(post);
+
+  const current = {
+    id: "current",
+    at: post.updatedAt,
+    note: "Current",
+    ai: post.ai,
+    variants: post.variants.map((variant) => ({
+      variantId: variant.id, platform: variant.platform, title: variant.title,
+      body: variant.body, hashtags: variant.hashtags, status: variant.status
+    }))
+  };
 
   openModal(`
     <div class="modal-inner">
       <div class="modal-head">
         <div>
-          <h2>What the model wrote</h2>
-          <p>${unchanged
-            ? "This draft is still exactly as generated. The original is kept separately, so editing below never overwrites it."
-            : "The untouched output from the generation run. Your edits are kept separately, so this never changes."}</p>
+          <h2>Draft history</h2>
+          <p>Every version of this post the studio has held, newest first. Restoring replaces the working copy — and saves what it replaced, so a restore is itself undoable from this list. Published versions are never touched.</p>
         </div>
         <button class="icon-btn" type="button" data-close aria-label="Close">${icon("x")}</button>
       </div>
       <div class="modal-scroll">
-        <div class="diff">${esc(variant.aiBody)}</div>
+        ${generationBlock(current, { current: true })}
+        ${entries.length
+          ? entries.map((entry) => generationBlock(entry)).join("")
+          : `<p class="muted">Nothing earlier yet. Re-run the drafts and the version they replace is kept here.</p>`}
       </div>
-      <div class="modal-foot">
-        <button class="btn btn-ghost btn-sm" type="button" data-act="copy-original" data-variant="${esc(variantId)}">${icon("copy")} Copy</button>
-        <span class="spacer"></span>
-        ${unchanged
-          ? `<button class="btn btn-primary" type="button" data-close>Close</button>`
-          : `<button class="btn btn-ghost" type="button" data-act="revert-original" data-variant="${esc(variantId)}">Restore it</button>
-             <button class="btn btn-primary" type="button" data-close>Keep my edits</button>`}
-      </div>
+      <div class="modal-foot"><span class="spacer"></span><button class="btn btn-primary" type="button" data-close>Close</button></div>
     </div>`);
+}
+
+function generationBlock(entry, { current = false } = {}) {
+  return `<section class="gen${current ? " is-current" : ""}">
+    <header class="gen-head">
+      <strong>${esc(entry.note || "Earlier draft")}</strong>
+      <span class="stamp" title="${esc(fmtDateTime(entry.at))}">${relTime(entry.at)}</span>
+      ${entry.ai && entry.ai.provider !== "none" ? receiptChip(entry.ai, { compact: true }) : ""}
+      <span class="spacer"></span>
+      ${current ? `<span class="badge approved">In the editor</span>` : `
+        <button class="btn btn-ghost btn-sm" type="button" data-act="restore-generation" data-gen="${esc(entry.id)}">
+          ${icon("undo")} Restore this
+        </button>`}
+    </header>
+    ${entry.variants.length
+      ? entry.variants.map((variant) => `
+          <div class="gen-variant">
+            <span class="gen-platform">${esc(platformLabel(variant.platform))}</span>
+            <div class="diff">${esc([variant.title, buildCopyText(variant)].filter(Boolean).join("\n\n")) || "(empty)"}</div>
+          </div>`).join("")
+      : `<p class="muted">No copy recorded in this version.</p>`}
+  </section>`;
+}
+
+/* ------------------------------------------------------------
+   RE-RUN
+
+   Edit the shared message, press the button, get a fresh set of drafts
+   written from it. The operator's own wording is passed as the steer and
+   the drafts being replaced are passed as what NOT to repeat, so a
+   second run is a second attempt rather than the same attempt again.
+   ------------------------------------------------------------ */
+
+async function rerunDrafts() {
+  const post = currentPost();
+  if (!post || state.rerunning) return;
+
+  const credentials = readCredentials();
+  if (!credentials.keys[credentials.provider]) {
+    toast("Add a model API key under Cloud sync first.", { kind: "error" });
+    return openSyncDialog();
+  }
+
+  /* Published text is a record of what actually went out; nothing here
+     may overwrite it. */
+  const targets = post.variants.filter((variant) => variant.status !== "published");
+  if (!targets.length) return toast("Every version here is published. Duplicate the post to work on it again.", { kind: "error" });
+
+  const held = post.variants.length - targets.length;
+  const approved = targets.filter((variant) => variant.status !== "draft").length;
+  const ok = await confirmAction({
+    title: "Re-run the drafts?",
+    body: [
+      "The model rewrites each platform version from the shared message above.",
+      "What is there now is saved to Draft history first, so you can compare and go back.",
+      approved ? `${plural(approved, "approved version")} will go back to draft, because the text changes.` : "",
+      held ? `${plural(held, "published version")} stays exactly as recorded.` : ""
+    ].filter(Boolean).join(" "),
+    confirmLabel: "Re-run"
+  });
+  if (!ok) return;
+
+  pushGeneration(post, snapshotGeneration(post, { note: "Replaced by a re-run" }));
+
+  state.rerunning = true;
+  state.abort = new AbortController();
+  render();
+
+  const platforms = [...new Set(targets.map((variant) => variant.platform))];
+  const started = nowIso();
+
+  try {
+    const { generation, receipt } = await generateDrafts({
+      credentials,
+      brief: {
+        topic: post.topic || post.keyMessage || post.canonical,
+        campaign: post.campaign,
+        objective: post.objective,
+        audience: post.audience,
+        cta: state.data.organization.defaultCta,
+        tone: "",
+        platforms,
+        guidance: Object.fromEntries(platforms.map((key) => [key, getPlatform(key).guidance || ""])),
+        /* The two things that make this a second pass rather than a
+           repeat of the first. */
+        sharedMessage: post.canonical,
+        previousDrafts: targets.map((variant) => ({
+          platform: variant.platform,
+          copy: variant.body.slice(0, 900)
+        }))
+      },
+      organization: state.data.organization,
+      recentPosts: state.data.posts.filter((entry) => entry.id !== post.id).slice(0, 40),
+      signal: state.abort.signal
+    });
+
+    for (const variant of targets) {
+      const next = generation.variants.find((item) => item.platform === variant.platform);
+      if (!next) continue;
+      variant.title = next.title || variant.title;
+      variant.body = next.body;
+      /* The model's output moved, so the frozen original moves with it.
+         Leaving aiBody pointing at the first run would make this text
+         look hand-edited to voice.js, which would then quote machine
+         prose back to the model as an example of how a person writes —
+         the exact feedback loop that file exists to avoid. The old
+         original is not lost: the snapshot above holds it. */
+      variant.aiBody = next.body;
+      variant.hashtags = next.hashtags;
+      variant.notes = next.notes;
+      /* An approval was given to text that no longer exists. */
+      if (variant.status !== "draft") variant.status = "draft";
+    }
+
+    /* The operator's shared message is the instruction for this run, so
+       it survives it. Only an empty one takes the model's wording. */
+    if (!post.canonical.trim()) post.canonical = generation.canonical;
+
+    post.ai = {
+      provider: receipt.provider,
+      requestedModel: receipt.requestedModel,
+      servedModel: receipt.servedModel,
+      promptVersion: receipt.promptVersion,
+      responseId: receipt.responseId || "",
+      usage: receipt.usage || null,
+      latencyMs: receipt.latencyMs || 0,
+      at: receipt.at,
+      warnings: [...(generation.warnings || [])]
+    };
+    /* A rewrite can drift onto ground an earlier post already covered,
+       so the repetition check runs on every pass, not only the first. */
+    const similar = findSimilarPosts(post.canonical, state.data.posts.filter((entry) => entry.id !== post.id));
+    if (similar.length) {
+      post.ai.warnings.push(
+        `Reads a lot like "${similar[0].post.campaign}" (${Math.round(similar[0].score * 100)}% shared wording). Worth varying before publishing.`
+      );
+    }
+    if (generation.campaignAngle) post.ai.warnings.unshift(`Angle taken: ${generation.campaignAngle}`);
+    post.updatedAt = nowIso();
+
+    addRun(state.data, {
+      at: receipt.at, status: "ok",
+      provider: receipt.provider, requestedModel: receipt.requestedModel, servedModel: receipt.servedModel,
+      promptVersion: receipt.promptVersion, latencyMs: receipt.latencyMs, usage: receipt.usage,
+      responseId: receipt.responseId, platforms, postId: post.id, campaign: post.campaign
+    });
+    addActivity(state.data, "generated", `Re-ran the drafts for "${post.campaign}"`, post.id);
+
+    state.rerunning = false;
+    commit();
+    render();
+    toast(`Rewritten — ${plural(generationCount(post), "earlier version")} kept in history`, { kind: "good" });
+  } catch (error) {
+    state.rerunning = false;
+    /* The snapshot was taken before the call, so a failed run leaves an
+       entry describing text that was never replaced. Take it back out. */
+    post.generations = (post.generations || []).slice(1);
+
+    if (error?.name === "AbortError") { render(); return toast("Re-run cancelled"); }
+
+    addRun(state.data, {
+      at: started, status: "failed",
+      provider: credentials.provider, requestedModel: credentials.models[credentials.provider], servedModel: "",
+      promptVersion: PROMPT_VERSION, latencyMs: 0, usage: null, responseId: "",
+      platforms, postId: post.id, campaign: post.campaign, error: error.message
+    });
+    commit();
+    render();
+    openErrorDialog(error, { rerun: true });
+  } finally {
+    state.abort = null;
+  }
+}
+
+/* Put an earlier version back. The current text is snapshotted on the
+   way past, so this is reversible from the same list it was launched
+   from — the one property that makes restoring safe to try. */
+function restoreGeneration(genId) {
+  const post = currentPost();
+  if (!post) return;
+  const entry = generationEntries(post).find((item) => item.id === genId);
+  if (!entry) return;
+
+  pushGeneration(post, snapshotGeneration(post, { note: "Replaced by a restore" }));
+
+  let restored = 0;
+  for (const saved of entry.variants) {
+    /* Match on the variant id, falling back to the platform so a
+       version restored into a duplicated post still lands. */
+    const variant = post.variants.find((item) => item.id === saved.variantId)
+      || post.variants.find((item) => item.platform === saved.platform);
+    if (!variant || variant.status === "published") continue;
+    variant.title = saved.title;
+    variant.body = saved.body;
+    variant.hashtags = [...(saved.hashtags || [])];
+    if (saved.notes) variant.notes = saved.notes;
+    /* Restored text has not been approved in its own right. Any date on
+       it is left alone — it is a plan for the slot, not for the wording,
+       so the post stays in the Queue while it waits to be re-approved. */
+    variant.status = "draft";
+    restored += 1;
+  }
+  if (entry.canonical) post.canonical = entry.canonical;
+  post.updatedAt = nowIso();
+
+  addActivity(state.data, "post", `Restored an earlier draft of "${post.campaign}"`, post.id);
+  commit();
+  closeModal();
+  render();
+  toast(restored
+    ? `Restored ${plural(restored, "version")} — the text it replaced is in history`
+    : "Nothing to restore into: every version here is published", { kind: restored ? "good" : "error" });
 }
 
 function openShortcutsDialog() {
@@ -2274,12 +2709,20 @@ function handleAction(act, node, event) {
       render();
       return;
 
-    case "copy": return copyVariant(variantId);
-    case "copy-original": {
-      const { variant } = findVariant(variantId);
-      if (variant) copyText(variant.aiBody).then((ok) => toast(ok ? "Original copied" : "Could not reach the clipboard", { kind: ok ? "good" : "error" }));
+    /* A starter idea. Fills the brief's one field and leaves the caret
+       at the end of it, so the next keystroke edits rather than
+       replaces. */
+    case "use-topic": {
+      state.brief = { ...readBriefForm(), topic: node.dataset.topic || "" };
+      writeDraftBrief(state.brief);
+      render();
+      const box = el("#b-topic");
+      box?.focus();
+      box?.setSelectionRange(box.value.length, box.value.length);
       return;
     }
+
+    case "copy": return copyVariant(variantId);
     case "open-platform": return openPlatform(variantId);
 
     case "platform-add": return openPlatformDialog();
@@ -2289,8 +2732,9 @@ function handleAction(act, node, event) {
     case "approve-all": return approveAll();
     case "schedule": return openScheduleDialog(variantId);
     case "publish": return openPublishDialog(variantId);
-    case "show-original": return openOriginalDialog(variantId);
-    case "revert-original": return revertToOriginal(variantId);
+    case "rerun-drafts": return rerunDrafts();
+    case "draft-history": return openDraftHistoryDialog();
+    case "restore-generation": return restoreGeneration(node.dataset.gen);
 
     case "duplicate": return duplicatePost();
     case "archive": return archivePost();
@@ -2344,8 +2788,8 @@ function onInput(event) {
     if (!variant) return;
     variant[field] = field === "hashtags" ? splitTags(target.value) : target.value;
     post.updatedAt = nowIso();
-    /* Patch only the block under the field being typed in, so the caret
-       above it is never touched. */
+    /* Patch only the blocks under the field being typed in, so the caret
+       above them is never touched. */
     if (field === "body") {
       const holder = document.getElementById(`meta-${variantId}`);
       if (holder) holder.innerHTML = variantMeta(variant);
@@ -2353,6 +2797,12 @@ function onInput(event) {
     if (field === "title") {
       const meter = target.parentElement?.querySelector(".meter");
       if (meter) meter.outerHTML = meterFor(variant.title.length, getPlatform(variant.platform).titleMax);
+    }
+    /* Both fields feed the copy, so the preview of what gets pasted
+       follows either one. */
+    if (field === "body" || field === "hashtags") {
+      const preview = document.getElementById(`ready-${variantId}`);
+      if (preview) preview.innerHTML = readyBody(variant, getPlatform(variant.platform));
     }
     commit({ quiet: true });
   }
@@ -2391,9 +2841,15 @@ function onChange(event) {
     const { post, variant } = findVariant(target.dataset.variant);
     if (!variant) return;
     variant.scheduledAt = fromLocalInput(target.value);
+    /* Typing a date here and picking one in the Schedule dialog have to
+       leave the variant in the same state, or the Overview counts one
+       and not the other. Approving is still a separate decision, so a
+       draft stays a draft — it just carries a date. */
+    if (variant.scheduledAt && variant.status === "approved") variant.status = "scheduled";
     if (!variant.scheduledAt && variant.status === "scheduled") variant.status = "approved";
     post.updatedAt = nowIso();
     commit();
+    render();
     return;
   }
 
@@ -2512,13 +2968,16 @@ function toggleApprove(variantId) {
   if (variant.status === "draft") {
     const blocking = variantChecks(variant).filter((check) => check.level === "error");
     if (blocking.length) return toast(blocking[0].text, { kind: "error" });
-    variant.status = "approved";
+    /* A date was already set — on the brief, or in the field above — so
+       approving it puts it on the calendar rather than leaving it in the
+       state the Overview reports as "not scheduled". */
+    variant.status = variant.scheduledAt ? "scheduled" : "approved";
   } else {
     variant.status = "draft";
     variant.scheduledAt = "";
   }
   post.updatedAt = nowIso();
-  addActivity(state.data, "variant", `${variant.status === "approved" ? "Approved" : "Returned"} the ${platformLabel(variant.platform)} draft of "${post.campaign}"`, post.id);
+  addActivity(state.data, "variant", `${variant.status === "draft" ? "Returned" : "Approved"} the ${platformLabel(variant.platform)} draft of "${post.campaign}"`, post.id);
   commit();
   render();
 }
@@ -2531,7 +2990,7 @@ function approveAll() {
     if (variant.status !== "draft") continue;
     const errors = variantChecks(variant).filter((check) => check.level === "error");
     if (errors.length) { blocked.push(platformLabel(variant.platform)); continue; }
-    variant.status = "approved";
+    variant.status = variant.scheduledAt ? "scheduled" : "approved";
   }
   post.updatedAt = nowIso();
   addActivity(state.data, "post", `Approved the drafts in "${post.campaign}"`, post.id);
@@ -2574,21 +3033,6 @@ function savePublication(form) {
   closeModal();
   render();
   toast(wasPublished ? "Record updated" : "Publication recorded", { kind: "good" });
-}
-
-function revertToOriginal(variantId) {
-  const { post, variant } = findVariant(variantId);
-  if (!variant?.aiBody) return;
-  const previous = variant.body;
-  variant.body = variant.aiBody;
-  post.updatedAt = nowIso();
-  commit();
-  closeModal();
-  render();
-  toast("Restored the model's original", {
-    action: "Undo",
-    onAction: () => { variant.body = previous; commit(); render(); }
-  });
 }
 
 function saveExternalPost(form) {
@@ -2635,6 +3079,10 @@ function duplicatePost() {
   copy.createdAt = copy.updatedAt = nowIso();
   copy.status = "review";
   copy.source = post.source;
+  /* The history belongs to the post it was written for. A copy starts
+     with none, so nothing in its list claims to be an earlier version of
+     a draft that has not been run yet. */
+  copy.generations = [];
   for (const variant of copy.variants) {
     variant.id = `variant_${crypto.randomUUID()}`;
     variant.status = "draft";
@@ -2734,7 +3182,8 @@ function postToMarkdown(post) {
     `- Status: ${STATUS_LABELS[derivePostStatus(post)]}`,
     `- Created: ${fmtDateTime(post.createdAt)}`,
     `- Model: ${kind}`,
-    post.audience ? `- Audience: ${post.audience}` : "",
+    post.topic ? `- Topic: ${post.topic}` : "",
+    post.audience ? `- Audience: ${post.audience}${(post.derived || []).includes("audience") ? " (model's read)" : ""}` : "",
     post.tags?.length ? `- Tags: ${post.tags.join(", ")}` : "",
     "",
     post.canonical ? `> ${post.canonical.replace(/\n/g, "\n> ")}` : "",
