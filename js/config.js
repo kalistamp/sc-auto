@@ -32,7 +32,7 @@ export const APP_PASSKEY = "p";
    runs at all, and the passkey gate renders with a dead button. That has
    happened. tests/boot.test.mjs is what enforces it now — bump all five
    together and run `npm run check`. */
-export const BUILD = "3.3.0";
+export const BUILD = "3.4.0";
 
 /* The single file inside the gist that holds the whole workspace. */
 export const GIST_FILENAME = "sc_data.json";
@@ -56,6 +56,26 @@ export const RUN_LOG_LIMIT = 150;
 /* Activity entries kept. Shorter than the run log: these are UI
    breadcrumbs, not an audit record. */
 export const ACTIVITY_LIMIT = 120;
+
+/* ---- the bin -------------------------------------------------------
+
+   Deleting a post moves it here rather than destroying it. A record of
+   what went out — and what was decided against — is the most valuable
+   thing in this workspace and the least recoverable, and an undo that
+   lives for nine seconds in a toast is not a safety net for a decision
+   somebody might revisit tomorrow.
+   ------------------------------------------------------------------ */
+
+/* How long a deleted post stays recoverable. After this it is removed
+   for good, automatically, wherever the workspace is next opened. */
+export const DELETED_RETENTION_DAYS = 30;
+
+/* A backstop on the size of the bin, because the whole workspace is one
+   JSON file and a deleted post carries its full text and history. Only
+   ever trims the OLDEST beyond this count; the retention window above is
+   what normally empties it. Deliberately far above any plausible
+   month of deleting. */
+export const DELETED_LIMIT = 200;
 
 /* Earlier drafts kept per post, so re-running a generation can be
    compared against — and reverted to — what it replaced.

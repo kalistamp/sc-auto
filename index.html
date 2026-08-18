@@ -45,15 +45,15 @@
 <script type="importmap">
 {
   "imports": {
-    "./js/config.js":    "./js/config.js?v=3.3.0",
-    "./js/data.js":      "./js/data.js?v=3.3.0",
-    "./js/platforms.js": "./js/platforms.js?v=3.3.0",
-    "./js/providers.js": "./js/providers.js?v=3.3.0",
-    "./js/settings.js":  "./js/settings.js?v=3.3.0",
-    "./js/sync.js":      "./js/sync.js?v=3.3.0",
-    "./js/theme.js":     "./js/theme.js?v=3.3.0",
-    "./js/ui.js":        "./js/ui.js?v=3.3.0",
-    "./js/voice.js":     "./js/voice.js?v=3.3.0"
+    "./js/config.js":    "./js/config.js?v=3.4.0",
+    "./js/data.js":      "./js/data.js?v=3.4.0",
+    "./js/platforms.js": "./js/platforms.js?v=3.4.0",
+    "./js/providers.js": "./js/providers.js?v=3.4.0",
+    "./js/settings.js":  "./js/settings.js?v=3.4.0",
+    "./js/sync.js":      "./js/sync.js?v=3.4.0",
+    "./js/theme.js":     "./js/theme.js?v=3.4.0",
+    "./js/ui.js":        "./js/ui.js?v=3.4.0",
+    "./js/voice.js":     "./js/voice.js?v=3.4.0"
   }
 }
 </script>
@@ -86,7 +86,7 @@ window.addEventListener('DOMContentLoaded', function () {
 });
 </script>
 
-<link rel="stylesheet" href="styles.css?v=3.3.0">
+<link rel="stylesheet" href="styles.css?v=3.4.0">
 <!-- Fonts are self-hosted in assets/fonts and declared in styles.css. No
      third-party font CDN: a Google Fonts link would hand the IP and
      referring page of every visitor to another company, which is not what
@@ -97,7 +97,7 @@ window.addEventListener('DOMContentLoaded', function () {
 <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
 <link rel="manifest" href="manifest.webmanifest">
 </head>
-<body data-build="3.3.0">
+<body data-build="3.4.0">
 
 <a class="skip-link" href="#view">Skip to content</a>
 
@@ -195,6 +195,7 @@ window.addEventListener('DOMContentLoaded', function () {
       <button class="nav-btn" type="button" data-nav="library"><svg class="ico"><use href="#i-library"></use></svg><span>Library</span><span class="nav-count" id="count-library"></span></button>
       <button class="nav-btn" type="button" data-nav="queue"><svg class="ico"><use href="#i-calendar"></use></svg><span>Queue</span><span class="nav-count" id="count-queue"></span></button>
       <button class="nav-btn" type="button" data-nav="runs"><svg class="ico"><use href="#i-activity"></use></svg><span>Model runs</span></button>
+      <button class="nav-btn" type="button" data-nav="deleted"><svg class="ico"><use href="#i-trash"></use></svg><span>Deleted</span><span class="nav-count" id="count-deleted"></span></button>
       <button class="nav-btn" type="button" data-nav="settings"><svg class="ico"><use href="#i-gear"></use></svg><span>Settings</span></button>
     </nav>
 
@@ -275,6 +276,6 @@ window.addEventListener('DOMContentLoaded', function () {
   <button id="toast-action" class="toast-action" type="button" hidden></button>
 </div>
 
-<script type="module" src="js/app.js?v=3.3.0"></script>
+<script type="module" src="js/app.js?v=3.4.0"></script>
 </body>
 </html>

@@ -27,7 +27,10 @@
        platform added years from now as for the ones shipped here.
    ============================================================ */
 
-import { ACTIVITY_LIMIT, DRAFT_HISTORY_LIMIT, RUN_LOG_LIMIT, SIMILARITY_THRESHOLD } from "./config.js";
+import {
+  ACTIVITY_LIMIT, DELETED_LIMIT, DELETED_RETENTION_DAYS, DRAFT_HISTORY_LIMIT,
+  RUN_LOG_LIMIT, SIMILARITY_THRESHOLD
+} from "./config.js";
 
 export const SCHEMA_VERSION = 3;
 
@@ -324,6 +327,9 @@ export function createDefaultData() {
     },
     platforms: defaultPlatforms(),
     posts: [],
+    /* The bin. Posts deleted within the retention window, newest first,
+       each carrying the moment it was deleted. */
+    deleted: [],
     runs: [],
     activity: []
   };
@@ -355,6 +361,19 @@ export function migrateData(input) {
   delete data.platformSettings;   /* folded into data.platforms above */
 
   data.posts = (Array.isArray(data.posts) ? data.posts : []).map(migratePost);
+  /* A deleted post is a post plus the moment it went in the bin, so it
+     migrates the same way anything else does — a workspace that has sat
+     unopened through a schema change must not restore a post the rest of
+     the app cannot read. */
+  data.deleted = (Array.isArray(data.deleted) ? data.deleted : []).map((entry) => ({
+    ...migratePost(entry),
+    deletedAt: entry?.deletedAt || nowIso()
+  }));
+  /* Opening the workspace is the moment the clock is read. Nothing else
+     runs on a schedule here — there is no server — so expiry happens
+     wherever the operator next opens the studio, on any device. */
+  purgeExpiredDeleted(data);
+
   data.runs = (Array.isArray(data.runs) ? data.runs : []).slice(0, RUN_LOG_LIMIT);
   data.activity = (Array.isArray(data.activity) ? data.activity : []).slice(0, ACTIVITY_LIMIT);
   return data;
@@ -418,9 +437,17 @@ function migratePlatforms(data) {
   return list;
 }
 
+/* Deleted posts count. A post in the bin can be restored for thirty
+   days, and it comes back referencing whatever platform it was written
+   for — so that platform has to still be in the list, or the restored
+   post fails validation and the workspace stops saving entirely. */
 function referencedPlatformKeys(data) {
   const keys = new Set();
-  for (const post of Array.isArray(data.posts) ? data.posts : []) {
+  const all = [
+    ...(Array.isArray(data.posts) ? data.posts : []),
+    ...(Array.isArray(data.deleted) ? data.deleted : [])
+  ];
+  for (const post of all) {
     for (const variant of Array.isArray(post?.variants) ? post.variants : []) {
       if (variant?.platform) keys.add(String(variant.platform));
     }
@@ -545,6 +572,7 @@ export function validateData(data) {
   if (data.schemaVersion !== SCHEMA_VERSION) errors.push(`Unsupported schema version: ${data.schemaVersion}.`);
   if (!data.organization || typeof data.organization !== "object") errors.push("Organization settings are missing.");
   if (!Array.isArray(data.posts)) errors.push("Posts must be an array.");
+  if (!Array.isArray(data.deleted)) errors.push("Deleted posts must be an array.");
   if (!Array.isArray(data.runs)) errors.push("Runs must be an array.");
   if (!Array.isArray(data.activity)) errors.push("Activity must be an array.");
 
@@ -723,6 +751,76 @@ export function createExternalPost({ campaign, platform, body, title, publishedA
 }
 
 /* ------------------------------------------------------------
+   THE BIN
+
+   Deleting is a decision, and decisions get revisited. A post deleted
+   here is moved rather than destroyed: it keeps everything it had —
+   every platform version, its receipt, its publication record, its
+   draft history — and comes back whole.
+
+   The window is fixed at DELETED_RETENTION_DAYS. After that the entry
+   is gone for good, and gone means gone: this app has no server, so
+   there is no other copy but the gist's own revision history.
+   ------------------------------------------------------------ */
+
+const DAY_MS = 86400000;
+
+export function deletionExpiresAt(entry) {
+  const at = Date.parse(entry?.deletedAt || "");
+  return Number.isNaN(at) ? 0 : at + DELETED_RETENTION_DAYS * DAY_MS;
+}
+
+/** Whole days left before this is removed for good; never below zero. */
+export function deletionDaysLeft(entry, now = Date.now()) {
+  return Math.max(0, Math.ceil((deletionExpiresAt(entry) - now) / DAY_MS));
+}
+
+/** How many entries were removed for good. Callers save when it is >0. */
+export function purgeExpiredDeleted(data, now = Date.now()) {
+  const current = Array.isArray(data.deleted) ? data.deleted : [];
+  const before = current.length;
+  data.deleted = current
+    .filter((entry) => deletionExpiresAt(entry) > now)
+    /* Newest first, so the cap below trims the oldest. */
+    .sort((a, b) => Date.parse(b.deletedAt) - Date.parse(a.deletedAt))
+    .slice(0, DELETED_LIMIT);
+  return before - data.deleted.length;
+}
+
+/* Out of the library, into the bin. Returns the entry so the caller can
+   offer an immediate undo as well as the 30 days. */
+export function softDeletePost(data, post) {
+  const index = data.posts.indexOf(post);
+  if (index >= 0) data.posts.splice(index, 1);
+  const entry = { ...post, deletedAt: nowIso() };
+  data.deleted.unshift(entry);
+  purgeExpiredDeleted(data);
+  return entry;
+}
+
+/* Back out of the bin, at the top of the library. The id is re-minted
+   only if something has taken it in the meantime — an imported backup
+   can reintroduce a post that was deleted here, and two posts sharing an
+   id is a workspace that fails validation. */
+export function restoreDeletedPost(data, postId) {
+  const index = data.deleted.findIndex((entry) => entry.id === postId);
+  if (index < 0) return null;
+
+  const [entry] = data.deleted.splice(index, 1);
+  const { deletedAt, ...post } = entry;
+  if (data.posts.some((existing) => existing.id === post.id)) post.id = createId("post");
+  post.updatedAt = nowIso();
+  data.posts.unshift(post);
+  return post;
+}
+
+export function removeDeletedForever(data, postId) {
+  const index = data.deleted.findIndex((entry) => entry.id === postId);
+  if (index < 0) return null;
+  return data.deleted.splice(index, 1)[0];
+}
+
+/* ------------------------------------------------------------
    DRAFT HISTORY
 
    Re-running the model over a post replaces text the operator may have
@@ -865,6 +963,7 @@ export function countsFor(data) {
        never report different numbers. */
     queued: pairs.filter(({ variant }) => isQueued(variant)).length,
     published: pairs.filter(({ variant }) => variant.status === "published").length,
-    overdue: pairs.filter(({ variant }) => isOverdue(variant)).length
+    overdue: pairs.filter(({ variant }) => isOverdue(variant)).length,
+    deleted: (data.deleted || []).length
   };
 }

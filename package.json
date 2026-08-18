@@ -1,6 +1,6 @@
 {
   "name": "safe-cycle-studio",
-  "version": "3.3.0",
+  "version": "3.4.0",
   "private": true,
   "type": "module",
   "description": "Private drafting, review, and publication record for Safe Cycle Tech social posts. Static site, no build step.",

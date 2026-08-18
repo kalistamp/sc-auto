@@ -208,6 +208,56 @@ record, marked as having had no model behind it.
 
 ---
 
+## Reading a post
+
+Lists truncate to one line and the editor holds the copy in a box sized for
+typing, so neither is any good for reading a long post end to end. **Read full
+post** — under the Ready to paste panel, on the eye beside any Queue row, and on
+anything in the bin — opens the whole thing in its own window.
+
+It shows the same text the clipboard gets, hashtags included, in the position
+they will be published in. The text wraps: your paragraph breaks are kept, and a
+long URL breaks rather than pushing the window sideways. Nothing in that window
+scrolls horizontally. Where a post has several platform versions, they are one
+click apart at the bottom.
+
+The reader is read-only on purpose — editing belongs in the editor, where the
+character meters and the platform checks are.
+
+---
+
+## Deciding against a post
+
+Three ways to say no, in order of how final they are:
+
+| You want to | Do this | What happens |
+|---|---|---|
+| Send it back for another pass | **Back to draft** on that version | Approval is withdrawn; the text stays |
+| Keep the record, out of the way | **Archive** | It leaves the active lists and keeps everything |
+| Not use it at all | **Delete** | It moves to **Deleted posts** for 30 days |
+
+**Deleting no longer destroys anything.** The post goes to the bin whole — every
+platform version, its receipt, its publication record, its draft history — and
+**Restore** brings all of it back to the library. Each row shows how many days
+are left, and the last three days are flagged.
+
+After 30 days an entry is removed for good. There is no server here to run a
+timer, so expiry is applied from the clock whenever the workspace is next opened
+— on whichever device opens it. **Remove permanently** and **Empty the bin** do
+the same thing immediately, and both say plainly that the gist's revision history
+is the only copy left afterwards.
+
+The window and the bin's size cap are `DELETED_RETENTION_DAYS` and
+`DELETED_LIMIT` in [`js/config.js`](js/config.js).
+
+One thing the bin does quietly: a platform used only by a deleted post stays
+registered. Otherwise removing that platform, then restoring the post a week
+later, would produce a post pointing at a platform the list no longer has — and
+the studio refuses to save a workspace that contradicts itself, so the symptom
+would be saving stopping altogether.
+
+---
+
 ## What "scheduled" means
 
 A date is a note in a diary. Nothing in this app publishes on a timer, and the
@@ -248,7 +298,7 @@ Warnings never block. The operator knows things the app does not.
 
 | Key | Does |
 |---|---|
-| `g` then `o` `c` `l` `q` `r` `s` | Overview, Compose, Library, Queue, Runs, Settings |
+| `g` then `o` `c` `l` `q` `r` `d` `s` | Overview, Compose, Library, Queue, Runs, Deleted, Settings |
 | `n` | Start a draft |
 | `/` | Search the library |
 | `t` | Toggle light and dark |
@@ -348,10 +398,10 @@ neutral **Any platform** option is added. Any platform your posts reference but
 the list no longer offers, LinkedIn included, is re-registered as retired so no
 post is orphaned or reassigned.
 
-**Within schema 3 (3.2 → 3.3).** No migration step and no version bump: posts
-gain `topic`, `derived` and `generations`, all of which default cleanly on an
-older post. Two things do change on load, both in the direction of the record
-being true:
+**Within schema 3 (3.2 → 3.4).** No migration step and no version bump: posts
+gain `topic`, `derived` and `generations`, the workspace gains `deleted`, and all
+of them default cleanly on an older workspace. Two things do change on load, both
+in the direction of the record being true:
 
 - A post written before briefs shrank has its `topic` read from its old key
   message, so nothing shows up blank.

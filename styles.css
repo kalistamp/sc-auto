@@ -118,7 +118,7 @@
        Pages CDN is serving a stale stylesheet and the app says so out
        loud instead of failing in some confusing partial way. Bump it
        together with ?v= on the <link>/<script> and data-build. */
-    --build: "3.3.0";
+    --build: "3.4.0";
 
     color-scheme: light;
 }
@@ -717,7 +717,12 @@ a { color: var(--accent); text-underline-offset: 3px; }
     transition: background var(--dur) var(--ease);
 }
 .rows > .row:first-child { border-top: 0; }
-.row:hover { background: var(--surface-2); }
+button.row:hover { background: var(--surface-2); }
+/* A row that is a container for its own buttons rather than one big
+   button — the bin's rows, which carry Restore and Remove. */
+/* Four controls sit on the right of a bin row, so it wraps rather than
+   squeezing the campaign name to nothing on a phone. */
+.row.is-static { cursor: default; flex-wrap: wrap; row-gap: .55rem; }
 .row-main { flex: 1; min-width: 0; }
 .row-title {
     display: block;
@@ -732,7 +737,7 @@ a { color: var(--accent); text-underline-offset: 3px; }
 }
 .row-meta { display: flex; align-items: center; gap: .45rem; margin-top: .3rem; flex-wrap: wrap; }
 .row-side { display: flex; align-items: center; gap: .5rem; flex: none; }
-.row:hover .row-title { color: var(--accent); }
+button.row:hover .row-title { color: var(--accent); }
 
 .stamp {
     font-size: .74rem; color: var(--ink-faint);
@@ -1363,6 +1368,17 @@ button.receipt { cursor: pointer; }
 }
 .queue-item:hover { transform: translateX(2px); box-shadow: var(--shadow-sm); }
 .queue-item.is-late { background: var(--warn-wash); }
+/* The row opens the draft; the eye beside it opens the reader. The
+   clickable part is a real button inside the card, because a button
+   inside a button is invalid and the browser would drop one of them. */
+.queue-open {
+    display: flex; align-items: center; gap: .9rem;
+    flex: 1; min-width: 0;
+    padding: 0; border: 0; background: none;
+    text-align: left; cursor: pointer;
+    color: inherit; font: inherit;
+}
+.queue-open:hover .row-title { color: var(--accent); }
 
 /* ============================================================
    RUN LOG
@@ -1471,6 +1487,38 @@ table.log .num { font-variant-numeric: tabular-nums; font-family: var(--font-mon
 .notice .ico { color: var(--info); flex: none; margin-top: .1em; }
 .notice.is-warn { background: var(--warn-wash); }
 .notice.is-warn .ico { color: var(--warn); }
+
+/* ---- the reader ----
+   A window for reading one post end to end. Everything here serves that
+   and nothing else: a comfortable measure, generous leading, and text
+   that WRAPS.
+
+   The wrapping is the requirement, not a detail. `pre-wrap` keeps the
+   blank lines the operator put between paragraphs instead of collapsing
+   the post into a wall; `overflow-wrap: anywhere` breaks a long URL or
+   an unspaced string rather than widening the box and pushing the page
+   sideways. Nothing in this window scrolls horizontally — the modal
+   itself says so below, so a future child cannot reintroduce it. */
+.reader { padding-bottom: .4rem; }
+.reader-meta {
+    display: flex; align-items: center; gap: .5rem; flex-wrap: wrap;
+    margin-top: .5rem;
+}
+.reader-title {
+    font-family: var(--font-display);
+    font-size: 1.15rem; font-weight: 500; line-height: 1.35;
+    margin-bottom: .7rem;
+    overflow-wrap: anywhere;
+}
+.reader-text {
+    max-width: 68ch;
+    font-size: 1rem;
+    line-height: 1.75;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+.reader-switch { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; margin: 1.1rem 0 .2rem; }
+.modal-scroll { overflow-x: hidden; }
 
 .facts { display: grid; grid-template-columns: max-content 1fr; gap: .4rem 1.2rem; margin: 0; font-size: .85rem; }
 .facts dt { color: var(--ink-faint); }

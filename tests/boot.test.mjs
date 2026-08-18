@@ -302,6 +302,59 @@ test("the editor columns space themselves, rather than each block guessing", asy
   assert.ok(reset < css.indexOf("   QUEUE"), "and stay in the editor section it belongs to");
 });
 
+test("the reader shows the whole post, and wraps it", async () => {
+  const app = await read("js/app.js");
+  const css = await read("styles.css");
+
+  const reader = app.slice(app.indexOf("function openReaderDialog("), app.indexOf("function openShortcutsDialog("));
+  assert.match(reader, /buildCopyText\(variant\)/,
+    "the reader must show the same text the clipboard gets, hashtags included");
+  assert.match(reader, /class="reader-text"/);
+  assert.match(reader, /size: "lg"/, "a post needs the wide dialog to be read comfortably");
+
+  /* The wrapping is the requirement. pre-wrap keeps the operator's own
+     paragraph breaks; overflow-wrap breaks a long URL instead of
+     widening the window. */
+  const rule = css.slice(css.indexOf(".reader-text {"), css.indexOf("}", css.indexOf(".reader-text {")));
+  assert.match(rule, /white-space: pre-wrap/);
+  assert.match(rule, /overflow-wrap: anywhere/);
+  assert.match(css, /\.modal-scroll \{ overflow-x: hidden/, "nothing in a dialog may scroll sideways");
+
+  /* Reachable from the two places a post is read rather than written. */
+  assert.match(app.slice(app.indexOf("function readyBody(")), /data-act="read-post"/);
+  assert.match(app.slice(app.indexOf("function queueItem("), app.indexOf("function renderDeleted(")), /data-act="read-post"/);
+});
+
+test("a queue row does not nest one button inside another", async () => {
+  const app = await read("js/app.js");
+  const item = app.slice(app.indexOf("function queueItem("), app.indexOf("function renderDeleted("));
+  /* Browsers drop the inner button, so the reader would never open. */
+  assert.doesNotMatch(item, /<button class="queue-item/, "the card must be a container, not a button");
+  assert.match(item, /<div class="queue-item/);
+  assert.match(item, /<button class="queue-open"/, "the row still has to be clickable on its own");
+});
+
+test("deleting is recoverable, and the bin has its own section", async () => {
+  const app = await read("js/app.js");
+  const html = await read("index.html");
+
+  assert.match(html, /data-nav="deleted"/, "the bin needs a way in from the sidebar");
+  assert.match(app, /deleted:\s*\{ title: "Deleted posts"/, "and a view behind it");
+
+  /* Delete must move the post rather than drop it on the floor. */
+  const remove = app.slice(app.indexOf("async function deletePost("), app.indexOf("function restorePost("));
+  assert.match(remove, /softDeletePost\(state\.data, post\)/);
+  assert.doesNotMatch(remove, /posts\.splice/, "nothing is destroyed at delete time any more");
+  assert.match(remove, /DELETED_RETENTION_DAYS/, "the confirmation has to say how long it is kept");
+
+  /* Expiry is read from the clock on load and when the bin is opened;
+     there is no server to run a timer. */
+  assert.match(app, /function renderDeleted\(\)[\s\S]{0,400}purgeExpiredDeleted\(state\.data\)/);
+  const data = await read("js/data.js");
+  assert.match(data, /data\.deleted = \(Array\.isArray\(data\.deleted\)/, "the bin migrates like anything else");
+  assert.match(data.slice(data.indexOf("export function migrateData")), /purgeExpiredDeleted\(data\)/);
+});
+
 test("the passkey gate has the exact anchors app.js wires itself to", async () => {
   const html = await read("index.html");
   const app = await read("js/app.js");

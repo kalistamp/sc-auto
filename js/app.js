@@ -14,13 +14,15 @@
    nothing ever will; that boundary is the point.
    ============================================================ */
 
-import { APP_PASSKEY, BUILD } from "./config.js";
+import { APP_PASSKEY, BUILD, DELETED_RETENTION_DAYS } from "./config.js";
 import {
   STATUS_LABELS,
   addActivity, addRun, allVariants, countsFor, createDefaultData, createExternalPost,
-  createPostFromGeneration, derivePostStatus, findSimilarPosts, getPlatform, isOverdue,
-  isQueued, isScheduled, listPlatforms, migrateData, normalizePlatform, nowIso, platformKeys,
-  pushGeneration, setActivePlatforms, snapshotGeneration, splitTags, textSimilarity,
+  createPostFromGeneration, deletionDaysLeft, deletionExpiresAt, derivePostStatus,
+  findSimilarPosts, getPlatform,
+  isOverdue, isQueued, isScheduled, listPlatforms, migrateData, normalizePlatform, nowIso,
+  platformKeys, purgeExpiredDeleted, pushGeneration, removeDeletedForever, restoreDeletedPost,
+  setActivePlatforms, snapshotGeneration, softDeletePost, splitTags, textSimilarity,
   uniquePlatformKey, validateData
 } from "./data.js";
 import { buildCopyText, platformHomeUrl, platformLabel, variantChecks } from "./platforms.js";
@@ -59,6 +61,7 @@ const VIEWS = {
   library:  { title: "Library", sub: "Every draft and publication record", render: renderLibrary },
   queue:    { title: "Queue", sub: "Approved and scheduled, in date order", render: renderQueue },
   runs:     { title: "Model runs", sub: "Which model produced what, and when", render: renderRuns },
+  deleted:  { title: "Deleted posts", sub: `Recoverable for ${DELETED_RETENTION_DAYS} days`, render: renderDeleted },
   settings: { title: "Settings", sub: "Organization context, sync, and data", render: renderSettings },
   editor:   { title: "Draft", sub: "Review, edit, approve, publish", render: renderEditor }
 };
@@ -392,12 +395,14 @@ function paintNav() {
   const counts = countsFor(state.data);
   const library = el("#count-library");
   const queue = el("#count-queue");
+  const deleted = el("#count-deleted");
   library.textContent = counts.needsReview ? String(counts.needsReview) : "";
   library.className = `nav-count${counts.needsReview ? " is-hot" : ""}`;
   /* Everything the Queue page lists, dated or not — the badge and that
      page have to agree on what "in the queue" means. */
   queue.textContent = counts.queued ? String(counts.queued) : "";
   queue.className = `nav-count${counts.overdue ? " is-hot" : ""}`;
+  if (deleted) deleted.textContent = counts.deleted ? String(counts.deleted) : "";
 }
 
 function paintSideModel() {
@@ -1083,20 +1088,95 @@ function renderQueue() {
       </section>` : ""}`;
 }
 
+/* A row with two ways in: the body of it opens the draft to work on,
+   and the eye opens the reader.
+
+   It is a <div> wrapping two buttons rather than one big button, because
+   a button inside a button is invalid HTML — browsers drop the inner one
+   and the reader would simply never open. The outer element keeps the
+   card's look; the inner button carries the click. */
 function queueItem({ post, variant }) {
   const meta = getPlatform(variant.platform);
   const late = isOverdue(variant);
-  return `<button class="queue-item${late ? " is-late" : ""}" type="button" style="--platform:${meta?.color}" data-act="open-post" data-post="${esc(post.id)}">
-    <span class="pip" style="background:${meta?.color}">${esc((meta?.label || "?")[0])}</span>
-    <span class="row-main">
-      <span class="row-title">${esc(post.campaign)}</span>
-      <span class="row-sub">${esc(firstLine(variant.body) || "No copy yet")}</span>
-    </span>
+  return `<div class="queue-item${late ? " is-late" : ""}" style="--platform:${meta?.color}">
+    <button class="queue-open" type="button" data-act="open-post" data-post="${esc(post.id)}">
+      <span class="pip" style="background:${meta?.color}">${esc((meta?.label || "?")[0])}</span>
+      <span class="row-main">
+        <span class="row-title">${esc(post.campaign)}</span>
+        <span class="row-sub">${esc(firstLine(variant.body) || "No copy yet")}</span>
+      </span>
+    </button>
     <span class="row-side">
       <span class="badge ${variant.status}">${esc(STATUS_LABELS[variant.status])}</span>
       <span class="stamp">${variant.scheduledAt ? esc(fmtTime(variant.scheduledAt)) : "—"}</span>
+      <button class="icon-btn" type="button" data-act="read-post" data-variant="${esc(variant.id)}"
+              title="Read the full post">${icon("eye")}</button>
     </span>
-  </button>`;
+  </div>`;
+}
+
+/* ============================================================
+   VIEW — DELETED POSTS
+
+   The bin, and the answer to "what if I decide against a post". A
+   deleted post is not destroyed: it waits here for
+   DELETED_RETENTION_DAYS with everything it had, and comes back whole.
+
+   Expiry is read from the clock rather than run by a timer, because
+   there is no server to run one. Opening this view is one of the
+   moments the clock is read; loading the workspace is the other.
+   ============================================================ */
+
+function renderDeleted() {
+  const purged = purgeExpiredDeleted(state.data);
+  /* Anything the clock removed has to reach the gist too, but not from
+     inside a render — a save that fires mid-paint reenters this code. */
+  if (purged) queueMicrotask(() => commit());
+
+  const entries = state.data.deleted;
+
+  return `
+    <section class="page-head">
+      <div class="page-head-main">
+        <p class="eyebrow">Deleted</p>
+        <h2>${entries.length ? `${plural(entries.length, "post")} in the bin` : "The bin is empty"}</h2>
+        <p class="lede">Deleting a post moves it here for ${DELETED_RETENTION_DAYS} days with everything it had — every platform version, its receipt, and its publication record. Restore it in that time and nothing is lost. After that it is removed for good, wherever you next open the studio.</p>
+      </div>
+      ${entries.length ? `<button class="btn btn-ghost" type="button" data-act="empty-bin">${icon("trash")} Empty the bin</button>` : ""}
+    </section>
+
+    ${entries.length
+      ? `<div class="card"><div class="rows">${entries.map(deletedRow).join("")}</div></div>`
+      : emptyBlock("trash", "Nothing deleted",
+          `Posts you delete wait here for ${DELETED_RETENTION_DAYS} days before they are removed for good.`,
+          { action: "Go to the library", nav: "library" })}`;
+}
+
+function deletedRow(entry) {
+  const left = deletionDaysLeft(entry);
+  const status = derivePostStatus(entry);
+
+  return `<div class="row is-static">
+    <span class="row-main">
+      <span class="row-title">${esc(entry.campaign)}</span>
+      <span class="row-sub">${esc(firstLine(entry.canonical || entry.topic) || "No copy")}</span>
+      <span class="row-meta">
+        ${pips(entry.variants)}
+        <span class="badge ${status}">${esc(STATUS_LABELS[status])}</span>
+        <span class="stamp">Deleted ${relTime(entry.deletedAt)}</span>
+      </span>
+    </span>
+    <span class="row-side">
+      <span class="badge ${left <= 3 ? "review" : "draft"}" title="Removed for good on ${esc(fmtDateTime(deletionExpiresAt(entry)))}">
+        ${left === 0 ? "Gone today" : plural(left, "day")} left
+      </span>
+      ${entry.variants.length
+        ? `<button class="icon-btn" type="button" data-act="read-post" data-variant="${esc(entry.variants[0].id)}" title="Read the full post">${icon("eye")}</button>`
+        : ""}
+      <button class="btn btn-soft btn-sm" type="button" data-act="restore-post" data-post="${esc(entry.id)}">${icon("undo")} Restore</button>
+      <button class="btn btn-quiet btn-sm" type="button" data-act="purge-post" data-post="${esc(entry.id)}" title="Remove this permanently, now">${icon("trash")}</button>
+    </span>
+  </div>`;
 }
 
 /* ============================================================
@@ -1490,6 +1570,10 @@ function readyBody(variant, meta) {
     <footer class="ready-foot">
       <span class="stamp">${plural(text.length, "character")}</span>
       <span class="spacer"></span>
+      <button class="btn btn-quiet btn-sm" type="button" data-act="read-post" data-variant="${esc(variant.id)}"
+              title="Open the whole post in a reading window">
+        ${icon("eye")} Read full post
+      </button>
       ${meta.homeUrl ? `<button class="btn btn-quiet btn-sm" type="button" data-act="open-platform" data-variant="${esc(variant.id)}"
               title="Copies this post, then opens ${esc(meta.label)} in a new tab so you can log in and paste it">
         ${icon("external")} Open ${esc(meta.label)}
@@ -1696,9 +1780,19 @@ function platformRow(platform) {
 
 /* How many recorded variants point at this platform. Drives the removal
    warning, because removing a platform that carries history is a very
-   different decision from removing one that never got used. */
+   different decision from removing one that never got used.
+
+   Posts in the bin are counted. They can be restored for thirty days,
+   and a restored post whose platform was deleted in the meantime would
+   reference a key the list no longer has — which is a workspace that
+   fails validation and therefore stops saving. Counting them here means
+   such a platform is retired instead of removed, and the record holds. */
 function platformUsage(key) {
-  return allVariants(state.data).filter(({ variant }) => variant.platform === key).length;
+  const live = allVariants(state.data).filter(({ variant }) => variant.platform === key).length;
+  const binned = state.data.deleted
+    .flatMap((entry) => entry.variants)
+    .filter((variant) => variant.platform === key).length;
+  return live + binned;
 }
 
 /* ============================================================
@@ -2635,10 +2729,84 @@ function restoreGeneration(genId) {
     : "Nothing to restore into: every version here is published", { kind: restored ? "good" : "error" });
 }
 
+/* ------------------------------------------------------------
+   THE READER
+
+   A post is written to be read in one piece, and nothing else in this
+   app shows it that way: the editor has it in a textarea sized for
+   editing, and every list truncates it to one line with an ellipsis.
+   So this window does one job — the whole post, as it will be pasted,
+   set to be read.
+
+   Two rules it exists to keep:
+     · The text WRAPS. `pre-wrap` keeps the operator's own line breaks,
+       `overflow-wrap: anywhere` breaks a long URL rather than pushing
+       the window sideways. Nothing here scrolls horizontally.
+     · It is the same text the clipboard gets, built by the same
+       buildCopyText — hashtags included, in the position they will be
+       published in.
+
+   Read-only on purpose. Editing happens in the editor, where the
+   character meters and the platform checks are.
+   ------------------------------------------------------------ */
+
+function openReaderDialog(variantId) {
+  const { post, variant } = findVariantAnywhere(variantId);
+  if (!variant) return;
+
+  const meta = getPlatform(variant.platform);
+  const text = buildCopyText(variant);
+  const words = text.trim() ? text.trim().split(/\s+/).length : 0;
+  const others = post.variants.filter((item) => item.id !== variant.id);
+
+  openModal(`
+    <div class="modal-inner">
+      <div class="modal-head">
+        <div>
+          <h2>${esc(post.campaign)}</h2>
+          <p class="reader-meta">
+            <span class="pip" style="background:${esc(meta.color)}">${esc(meta.label[0])}</span>
+            <span>${esc(meta.label)}</span>
+            <span class="badge ${variant.status}">${esc(STATUS_LABELS[variant.status])}</span>
+            ${variant.scheduledAt ? `<span class="stamp">${esc(fmtDateTime(variant.scheduledAt))}</span>` : ""}
+          </p>
+        </div>
+        <button class="icon-btn" type="button" data-close aria-label="Close">${icon("x")}</button>
+      </div>
+
+      <div class="modal-scroll">
+        <article class="reader">
+          ${variant.title ? `<h3 class="reader-title">${esc(variant.title)}</h3>` : ""}
+          <div class="reader-text">${esc(text) || `<span class="muted">This version has no copy yet.</span>`}</div>
+          ${variant.notes ? `<ul class="notes is-info"><li>${icon("info")}<span>${esc(variant.notes)}</span></li></ul>` : ""}
+          ${variant.publishedUrl && safeUrl(variant.publishedUrl) ? `
+            <div class="published-link">
+              ${icon("link")}
+              <a href="${esc(safeUrl(variant.publishedUrl))}" target="_blank" rel="noopener noreferrer">${esc(variant.publishedUrl)}</a>
+            </div>` : ""}
+        </article>
+
+        ${others.length ? `
+          <p class="reader-switch">
+            <span class="stamp">Other versions:</span>
+            ${others.map((item) => `<button class="linkish" type="button" data-act="read-post" data-variant="${esc(item.id)}">${esc(platformLabel(item.platform))}</button>`).join("")}
+          </p>` : ""}
+      </div>
+
+      <div class="modal-foot">
+        <span class="stamp">${plural(words, "word")} · ${plural(text.length, "character")}</span>
+        <span class="spacer"></span>
+        <button class="btn btn-ghost" type="button" data-close>Close</button>
+        <button class="btn btn-primary" type="button" data-act="copy" data-variant="${esc(variant.id)}">${icon("copy")} Copy post</button>
+      </div>
+    </div>`, { size: "lg" });
+}
+
 function openShortcutsDialog() {
   const rows = [
     ["g then o", "Overview"], ["g then c", "New draft"], ["g then l", "Library"],
-    ["g then q", "Queue"], ["g then r", "Model runs"], ["g then s", "Settings"],
+    ["g then q", "Queue"], ["g then r", "Model runs"], ["g then d", "Deleted posts"],
+    ["g then s", "Settings"],
     ["n", "Start a draft"], ["/", "Search the library"], ["t", "Toggle light and dark"],
     ["Esc", "Close a dialog or the menu"], ["?", "This list"]
   ];
@@ -2736,9 +2904,14 @@ function handleAction(act, node, event) {
     case "draft-history": return openDraftHistoryDialog();
     case "restore-generation": return restoreGeneration(node.dataset.gen);
 
+    case "read-post": return openReaderDialog(variantId);
+
     case "duplicate": return duplicatePost();
     case "archive": return archivePost();
     case "delete-post": return deletePost();
+    case "restore-post": return restorePost(node.dataset.post);
+    case "purge-post": return purgePost(node.dataset.post);
+    case "empty-bin": return emptyBin();
     case "export-post": return exportPost();
 
     case "export-json": return exportJson();
@@ -2892,7 +3065,7 @@ function onKeydown(event) {
 
   if (state.keySequence === "g") {
     state.keySequence = "";
-    const target = { o: "overview", c: "compose", l: "library", q: "queue", r: "runs", s: "settings" }[event.key];
+    const target = { o: "overview", c: "compose", l: "library", q: "queue", r: "runs", d: "deleted", s: "settings" }[event.key];
     if (target) { event.preventDefault(); navigate(target); }
     return;
   }
@@ -2933,8 +3106,25 @@ function findVariant(variantId) {
   return { post: null, variant: null };
 }
 
+/* The reader can be opened on a deleted post — reading it is exactly how
+   you decide whether to restore it — so it looks in the bin too. Kept
+   separate from findVariant() deliberately: every other caller of that
+   function mutates what it finds, and nothing should be able to edit,
+   approve or publish its way into a post that has been deleted. */
+function findVariantAnywhere(variantId) {
+  const live = findVariant(variantId);
+  if (live.variant) return live;
+  for (const entry of state.data.deleted) {
+    const variant = entry.variants.find((item) => item.id === variantId);
+    if (variant) return { post: entry, variant };
+  }
+  return { post: null, variant: null };
+}
+
 async function copyVariant(variantId) {
-  const { variant } = findVariant(variantId);
+  /* Anywhere, because the reader can be open on a post in the bin and
+     copying its text is the least destructive thing you can do with it. */
+  const { variant } = findVariantAnywhere(variantId);
   if (!variant) return;
   const ok = await copyText(buildCopyText(variant));
   toast(ok ? `${platformLabel(variant.platform)} copy is on the clipboard` : "The browser blocked the clipboard. Select the text and copy it.", { kind: ok ? "good" : "error" });
@@ -3109,6 +3299,10 @@ function archivePost() {
   toast(post.status === "archived" ? "Archived" : "Restored");
 }
 
+/* Deleting is now a move rather than an erasure: the post goes to the
+   bin and stays recoverable for DELETED_RETENTION_DAYS. The toast still
+   offers an immediate undo, because the fastest fix for a misclick is
+   the one that does not make you go and find the thing. */
 async function deletePost() {
   const post = currentPost();
   if (!post) return;
@@ -3117,29 +3311,81 @@ async function deletePost() {
   const ok = await confirmAction({
     title: `Delete "${post.campaign}"?`,
     body: published
-      ? `This post has ${plural(published, "published record")}. Deleting removes that history from the workspace — the posts stay live on their platforms.`
-      : "Every platform version goes with it. Undo is available for a few seconds afterwards.",
+      ? `This post has ${plural(published, "published record")}. It moves to Deleted posts, where you can restore it for ${DELETED_RETENTION_DAYS} days; after that the record of what went out is gone. The posts themselves stay live on their platforms.`
+      : `Every platform version goes with it. You can restore it from Deleted posts for ${DELETED_RETENTION_DAYS} days.`,
     confirmLabel: "Delete",
     danger: true
   });
   if (!ok) return;
 
-  const index = state.data.posts.indexOf(post);
-  state.data.posts.splice(index, 1);
+  softDeletePost(state.data, post);
   addActivity(state.data, "post", `Deleted "${post.campaign}"`);
   commit();
   state.postId = "";
   navigate("library");
 
-  toast(`Deleted "${post.campaign}"`, {
+  toast(`Deleted "${post.campaign}" — kept for ${DELETED_RETENTION_DAYS} days`, {
     action: "Undo",
-    onAction: () => {
-      state.data.posts.splice(index, 0, post);
-      addActivity(state.data, "post", `Restored "${post.campaign}"`, post.id);
-      commit();
-      render();
-    }
+    onAction: () => restorePost(post.id, { quiet: true })
   });
+}
+
+function restorePost(postId, { quiet = false } = {}) {
+  const post = restoreDeletedPost(state.data, postId);
+  if (!post) return toast("That post is no longer in the bin.", { kind: "error" });
+
+  addActivity(state.data, "post", `Restored "${post.campaign}" from the bin`, post.id);
+  commit();
+  render();
+  if (!quiet) {
+    toast(`"${post.campaign}" is back in the library`, {
+      action: "Open it",
+      onAction: () => { state.postId = post.id; navigate("editor"); }
+    });
+  } else {
+    toast(`"${post.campaign}" restored`, { kind: "good" });
+  }
+}
+
+/* The one place in this app that destroys something. Both routes into
+   it ask first, and both say plainly that the gist's revision history
+   is the only thing left afterwards. */
+async function purgePost(postId) {
+  const entry = state.data.deleted.find((item) => item.id === postId);
+  if (!entry) return;
+
+  const ok = await confirmAction({
+    title: `Remove "${entry.campaign}" for good?`,
+    body: "This does not wait for the 30 days. The post and every platform version go now, and the only copy left is in your gist's revision history.",
+    confirmLabel: "Remove permanently",
+    danger: true
+  });
+  if (!ok) return;
+
+  removeDeletedForever(state.data, postId);
+  addActivity(state.data, "data", `Permanently removed "${entry.campaign}"`);
+  commit();
+  render();
+  toast("Removed for good");
+}
+
+async function emptyBin() {
+  const count = state.data.deleted.length;
+  if (!count) return;
+
+  const ok = await confirmAction({
+    title: `Empty the bin?`,
+    body: `${plural(count, "deleted post")} ${count === 1 ? "is" : "are"} still inside their ${DELETED_RETENTION_DAYS}-day window. Emptying removes ${count === 1 ? "it" : "them"} now, and the only copy left is in your gist's revision history.`,
+    confirmLabel: "Empty it",
+    danger: true
+  });
+  if (!ok) return;
+
+  state.data.deleted = [];
+  addActivity(state.data, "data", `Emptied the bin (${plural(count, "post")})`);
+  commit();
+  render();
+  toast("The bin is empty");
 }
 
 /* ============================================================

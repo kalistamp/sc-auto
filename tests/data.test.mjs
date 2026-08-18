@@ -2,12 +2,18 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   NEUTRAL_PLATFORM_KEY, SCHEMA_VERSION, addActivity, addRun, countsFor, createDefaultData,
-  createExternalPost, createPostFromGeneration, defaultPlatforms, derivePostStatus,
-  findSimilarPosts, getPlatform, isQueued, isScheduled, listPlatforms, migrateData,
-  normalizePlatform, platformKeys, pushGeneration, setActivePlatforms, snapshotGeneration,
-  splitTags, textSimilarity, uniquePlatformKey, validateData
+  createExternalPost, createPostFromGeneration, defaultPlatforms, deletionDaysLeft,
+  derivePostStatus, findSimilarPosts, getPlatform, isQueued, isScheduled, listPlatforms,
+  migrateData, normalizePlatform, platformKeys, purgeExpiredDeleted, pushGeneration,
+  removeDeletedForever, restoreDeletedPost, setActivePlatforms, snapshotGeneration,
+  softDeletePost, splitTags, textSimilarity, uniquePlatformKey, validateData
 } from "../js/data.js";
-import { ACTIVITY_LIMIT, DRAFT_HISTORY_LIMIT, RUN_LOG_LIMIT } from "../js/config.js";
+import {
+  ACTIVITY_LIMIT, DELETED_LIMIT, DELETED_RETENTION_DAYS, DRAFT_HISTORY_LIMIT, RUN_LOG_LIMIT
+} from "../js/config.js";
+
+const DAY = 86400000;
+const daysAgo = (days) => new Date(Date.now() - days * DAY).toISOString();
 
 test("the default workspace is valid and carries the SafeCycle context", () => {
   const data = createDefaultData();
@@ -429,6 +435,110 @@ test("a snapshot is a copy, so later edits cannot rewrite what an earlier draft 
   assert.deepEqual(snapshot.variants[0].hashtags, ["One"]);
   assert.deepEqual(snapshot.ai.warnings, [], "the receipt is copied with the text it belongs to");
   assert.equal(snapshot.variants[0].variantId, "v1", "restoring has to know which version it came from");
+});
+
+/* ------------------------------------------------------------
+   THE BIN
+   ------------------------------------------------------------ */
+
+test("deleting moves a post to the bin whole, and restoring brings all of it back", () => {
+  const data = createDefaultData();
+  const post = {
+    id: "p1", campaign: "Spring drive", canonical: "Copy", status: "review", source: "ai",
+    ai: { provider: "openai", requestedModel: "m", servedModel: "m", warnings: [] },
+    generations: [{ id: "g1", at: daysAgo(1), note: "Replaced by a re-run", canonical: "old", ai: null, variants: [] }],
+    variants: [{
+      id: "v1", platform: "facebook", title: "", body: "Body", aiBody: "Body", hashtags: ["Reuse"],
+      status: "published", publishedUrl: "https://example.com/p", publishedBody: "Body"
+    }]
+  };
+  data.posts = [post];
+
+  softDeletePost(data, post);
+  assert.equal(data.posts.length, 0, "it leaves the library");
+  assert.equal(data.deleted.length, 1);
+  assert.ok(data.deleted[0].deletedAt, "the clock starts when it goes in");
+  assert.equal(deletionDaysLeft(data.deleted[0]), DELETED_RETENTION_DAYS);
+  assert.equal(countsFor(data).deleted, 1);
+
+  const back = restoreDeletedPost(data, "p1");
+  assert.equal(data.deleted.length, 0);
+  assert.equal(data.posts.length, 1);
+  assert.equal(back.variants[0].publishedUrl, "https://example.com/p", "the publication record survives the trip");
+  assert.equal(back.variants[0].publishedBody, "Body");
+  assert.deepEqual(back.variants[0].hashtags, ["Reuse"]);
+  assert.equal(back.generations.length, 1, "draft history comes back with it");
+  assert.equal(back.deletedAt, undefined, "a restored post carries no trace of having been deleted");
+  assert.deepEqual(validateData(data), []);
+});
+
+test("a deleted post is recoverable for the retention window and then removed for good", () => {
+  const data = createDefaultData();
+  data.deleted = [
+    { id: "fresh", campaign: "Today", variants: [], deletedAt: daysAgo(0) },
+    { id: "edge", campaign: "Nearly out", variants: [], deletedAt: daysAgo(DELETED_RETENTION_DAYS - 1) },
+    { id: "expired", campaign: "Past it", variants: [], deletedAt: daysAgo(DELETED_RETENTION_DAYS + 1) }
+  ];
+
+  const removed = purgeExpiredDeleted(data);
+  assert.equal(removed, 1);
+  assert.deepEqual(data.deleted.map((entry) => entry.id), ["fresh", "edge"], "newest first, and only the expired one goes");
+  assert.equal(deletionDaysLeft(data.deleted[1]), 1, "the last day still counts as recoverable");
+  assert.equal(restoreDeletedPost(data, "expired"), null, "what has expired cannot be restored");
+
+  /* Opening the workspace is what runs the clock — there is no server. */
+  const reopened = migrateData({
+    ...createDefaultData(),
+    deleted: [{ id: "old", campaign: "Old", variants: [], deletedAt: daysAgo(DELETED_RETENTION_DAYS + 5) }]
+  });
+  assert.deepEqual(reopened.deleted, [], "expiry is applied on load, on whichever device opens it next");
+});
+
+test("the bin is bounded, and removing forever is immediate", () => {
+  const data = createDefaultData();
+  for (let index = 0; index < DELETED_LIMIT + 10; index += 1) {
+    data.deleted.push({ id: `p${index}`, campaign: `Post ${index}`, variants: [], deletedAt: daysAgo(index % 20) });
+  }
+  purgeExpiredDeleted(data);
+  assert.equal(data.deleted.length, DELETED_LIMIT);
+
+  const target = data.deleted[0].id;
+  assert.ok(removeDeletedForever(data, target));
+  assert.equal(data.deleted.some((entry) => entry.id === target), false);
+  assert.equal(removeDeletedForever(data, "not-here"), null);
+});
+
+test("restoring never produces two posts with the same id", () => {
+  const data = createDefaultData();
+  data.posts = [{ id: "p1", campaign: "The one that came back another way", variants: [] }];
+  data.deleted = [{ id: "p1", campaign: "Deleted original", variants: [], deletedAt: daysAgo(1) }];
+
+  const restored = restoreDeletedPost(data, "p1");
+  assert.notEqual(restored.id, "p1", "an imported backup can reintroduce a deleted post's id");
+  assert.equal(data.posts.length, 2);
+  assert.deepEqual(validateData(data), []);
+});
+
+test("a platform used only by a post in the bin is kept, so restoring it cannot break saving", () => {
+  /* Without this the workspace stops saving entirely: validateData
+     rejects a post whose platform is not in the list, and flush() refuses
+     to write a workspace that fails validation. */
+  const data = migrateData({
+    schemaVersion: SCHEMA_VERSION,
+    platforms: [{ key: "default", label: "Any platform", enabled: true }],
+    posts: [],
+    deleted: [{
+      id: "p_del", campaign: "Instagram only", deletedAt: daysAgo(2),
+      variants: [{ id: "v", platform: "instagram", body: "text" }]
+    }]
+  });
+
+  assert.ok(data.platforms.some((platform) => platform.key === "instagram"),
+    "the platform is re-registered rather than dropped");
+  assert.deepEqual(validateData(data), []);
+
+  restoreDeletedPost(data, "p_del");
+  assert.deepEqual(validateData(data), [], "and the restored post still validates");
 });
 
 test("draft history keeps the newest versions and is bounded", () => {
