@@ -262,9 +262,13 @@ window.addEventListener('DOMContentLoaded', function () {
 
     <main id="view" class="view" tabindex="-1"></main>
   </div>
-</div>
 
-<div id="scrim" class="scrim" hidden></div>
+  <!-- Must live INSIDE .app: .app is its own stacking context (the fade
+       animation fills forwards), so the drawer's z-index is scoped to it.
+       A scrim outside .app paints over the drawer no matter how low its
+       z-index is, blurring and dimming it and eating its taps. -->
+  <div id="scrim" class="scrim" hidden></div>
+</div>
 
 <!-- Generic modal. Content is written per use; the shell, focus trap and
      Esc handling are the browser's, which is why this is a <dialog>. -->
