@@ -32,7 +32,7 @@ export const APP_PASSKEY = "p";
    runs at all, and the passkey gate renders with a dead button. That has
    happened. tests/boot.test.mjs is what enforces it now — bump all five
    together and run `npm run check`. */
-export const BUILD = "3.4.0";
+export const BUILD = "3.7.0";
 
 /* The single file inside the gist that holds the whole workspace. */
 export const GIST_FILENAME = "sc_data.json";

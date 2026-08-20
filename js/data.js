@@ -31,6 +31,7 @@ import {
   ACTIVITY_LIMIT, DELETED_LIMIT, DELETED_RETENTION_DAYS, DRAFT_HISTORY_LIMIT,
   RUN_LOG_LIMIT, SIMILARITY_THRESHOLD
 } from "./config.js";
+import { defaultCtaText } from "./signature.js";
 
 export const SCHEMA_VERSION = 3;
 
@@ -241,6 +242,28 @@ export function uniquePlatformKey(label, taken = []) {
 
 let activePlatforms = defaultPlatforms();
 
+/* ---- the active organization -------------------------------------
+
+   Same arrangement as the active platform list below, adopted for the
+   same reason: buildCopyText() has to append the operator's call to
+   action, and it is called from a dozen places that have no reason to
+   know about the organization record.
+
+   Set from adoptData() in app.js, which is the one chokepoint every
+   path that swaps the workspace already goes through.
+   ------------------------------------------------------------------ */
+
+let activeOrganization = {};
+
+export function setOrganization(organization) {
+  activeOrganization = organization && typeof organization === "object" ? organization : {};
+  return activeOrganization;
+}
+
+export function getOrganization() {
+  return activeOrganization;
+}
+
 export function setActivePlatforms(list) {
   const next = (Array.isArray(list) ? list : []).map((item) => normalizePlatform(item)).filter((item) => item.key);
   /* An empty or unreadable list would leave the operator with no way to
@@ -310,7 +333,7 @@ export function nowIso() {
 
 export function createDefaultData() {
   const now = nowIso();
-  return {
+  const data = {
     schemaVersion: SCHEMA_VERSION,
     revision: 0,
     createdAt: now,
@@ -318,10 +341,19 @@ export function createDefaultData() {
     organization: {
       name: "Safe Cycle Tech",
       website: "https://safecycletech.com/",
+      /* The sign-off every generated post closes with. js/signature.js
+         renders these into the prompt and checks the drafts against
+         them; an empty field is simply left out of both. */
+      phone: "(415) 612-8520",
+      email: "pickup@safecycletech.com",
       serviceArea: "Bay Area, California",
       mission: "Collect unwanted electronics, refurbish what can be saved for local students and families, and responsibly recycle the rest.",
       voice: "Neighborly, practical, trustworthy, specific, and never pushy.",
-      defaultCta: "Call or text (415) 612-8520 to schedule a free pickup.",
+      /* The exact block appended to the bottom of every post. Seeded from
+         the contact fields above so the two cannot disagree on day one;
+         plain text from then on, because it is copy and the operator
+         edits it as copy. See js/signature.js. */
+      cta: "",
       facts: [...DEFAULT_FACTS],
       prohibitedClaims: [...DEFAULT_RULES]
     },
@@ -333,6 +365,8 @@ export function createDefaultData() {
     runs: [],
     activity: []
   };
+  data.organization.cta = defaultCtaText(data.organization);
+  return data;
 }
 
 /* ------------------------------------------------------------
@@ -354,6 +388,14 @@ export function migrateData(input) {
   data.updatedAt ||= nowIso();
 
   data.organization = { ...base.organization, ...(data.organization || {}) };
+  /* The CTA replaced defaultCta, which was a one-line hint the model was
+     asked to work in. This one is appended verbatim instead, so an old
+     workspace takes the new seeded block rather than carrying forward a
+     sentence that was written for a different job. */
+  if (typeof data.organization.cta !== "string" || !data.organization.cta.trim()) {
+    data.organization.cta = defaultCtaText(data.organization);
+  }
+  delete data.organization.defaultCta;
   data.organization.facts = asStringList(data.organization.facts, DEFAULT_FACTS);
   data.organization.prohibitedClaims = asStringList(data.organization.prohibitedClaims, DEFAULT_RULES);
 

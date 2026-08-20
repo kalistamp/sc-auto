@@ -25,6 +25,7 @@
 
 import { getPlatform } from "./data.js";
 import { PROVIDERS } from "./settings.js";
+import { ctaRules, stripSignOff } from "./signature.js";
 import { exemplarSection, voiceRules } from "./voice.js";
 
 /* Bump when the instructions or output contract change, so an old post's
@@ -41,8 +42,15 @@ import { exemplarSection, voiceRules } from "./voice.js";
    supply the campaign name, audience and objective itself when the
    operator did not, and to work from a steer plus the previous drafts on
    a re-run. Both change what the instructions say, so the version moves
-   with them. */
-export const PROMPT_VERSION = "sct-social-6";
+   with them.
+
+   CHANGE (2026-08d): sct-social-6 → sct-social-7
+   Reason: a fixed call to action is now appended to every post after
+   generation, so the instructions tell the model NOT to write a sign-off
+   or any contact details — the opposite of what earlier versions left it
+   free to do. A receipt from before this change describes a prompt that
+   allowed both. See js/signature.js. */
+export const PROMPT_VERSION = "sct-social-7";
 
 export class ProviderError extends Error {
   constructor(message, { status = 0, hint = "" } = {}) {
@@ -83,7 +91,6 @@ export async function generateDrafts({ credentials, brief, organization, recentP
       objective: brief.objective || "",
       audience: brief.audience || "",
       keyMessage: brief.keyMessage || "",
-      callToAction: brief.cta || "",
       tone: brief.tone || "",
       platforms: brief.platforms,
       mustInclude: brief.mustInclude || ""
@@ -109,7 +116,7 @@ export async function generateDrafts({ credentials, brief, organization, recentP
   else raw = await callGemini({ apiKey, model: requestedModel, instructions, input, schema, signal });
 
   return {
-    generation: cleanGeneration(raw.generation, brief.platforms),
+    generation: cleanGeneration(raw.generation, brief.platforms, organization),
     receipt: {
       provider,
       providerLabel: meta.label,
@@ -486,6 +493,12 @@ function buildInstructions(organization, brief, recentPosts = []) {
      examples, not to substitute for them. */
   const exemplars = exemplarSection(recentPosts, brief.platforms?.[0] || "");
 
+  /* Not what to write, but what to leave out: the call to action is
+     appended verbatim after generation, so the model has to stay off it
+     and off the contact details it carries. Empty when no CTA is set, in
+     which case the model is told nothing about one. */
+  const signature = ctaRules(organization);
+
   /* THE BRIEF IS ALLOWED TO BE ONE LINE.
      Asking an operator to type an audience, an objective and a key
      message before they can have a draft is asking them to write most of
@@ -528,6 +541,7 @@ ${rules || "- (none recorded)"}
 Platforms
 ${perPlatform}
 ${exemplars ? `\n${exemplars}\n` : ""}
+${signature ? `${signature}\n` : ""}
 ${voiceRules()}
 
 Return only the requested JSON structure. Put anything the operator should check before publishing in "warnings".`;
@@ -561,7 +575,7 @@ function generationSchema(platforms) {
           properties: {
             platform: { type: "string", enum: platforms },
             title: { type: "string", description: "Only Reddit uses this; empty string elsewhere." },
-            body: { type: "string" },
+            body: { type: "string", description: "The post itself, ending with the sign-off described in the instructions." },
             hashtags: { type: "array", items: { type: "string" } },
             notes: { type: "string", description: "A note to the operator, not part of the post." }
           }
@@ -599,7 +613,7 @@ function parseGeneration(text) {
   }
 }
 
-function cleanGeneration(generation, platforms) {
+function cleanGeneration(generation, platforms, organization = {}) {
   if (!generation || !Array.isArray(generation.variants)) {
     throw new ProviderError("The model's reply was missing the platform drafts.");
   }
@@ -621,12 +635,17 @@ function cleanGeneration(generation, platforms) {
     audience: String(generation.audience || "").trim(),
     objective: String(generation.objective || "").trim(),
     campaignAngle: String(generation.campaignAngle || "").trim(),
-    canonical: String(generation.canonical || "").trim(),
+    canonical: stripSignOff(generation.canonical, organization),
     warnings: Array.isArray(generation.warnings) ? generation.warnings.map(String).filter(Boolean) : [],
     variants: variants.map((variant) => ({
       platform: variant.platform,
       title: String(variant.title || "").trim(),
-      body: String(variant.body || "").trim(),
+      /* The model is told not to write a sign-off; this is what happens
+         when it does one anyway. Trailing contact details come off here,
+         before the draft is ever stored, so the appended CTA cannot end
+         up as the post's second copy of the phone number. Anything left
+         mid-copy is reported by variantChecks() instead of edited. */
+      body: stripSignOff(variant.body, organization),
       hashtags: Array.isArray(variant.hashtags)
         ? variant.hashtags.map((tag) => String(tag).replace(/^#/, "").trim()).filter(Boolean)
         : [],

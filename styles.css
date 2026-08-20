@@ -118,7 +118,7 @@
        Pages CDN is serving a stale stylesheet and the app says so out
        loud instead of failing in some confusing partial way. Bump it
        together with ?v= on the <link>/<script> and data-build. */
-    --build: "3.4.0";
+    --build: "3.7.0";
 
     color-scheme: light;
 }
@@ -1291,6 +1291,103 @@ button.receipt { cursor: pointer; }
 /* A published variant is a record, not a handoff. */
 .variant.is-published .ready { border-color: var(--line); background: var(--surface-2); }
 .variant.is-published .ready-head, .variant.is-published .ready-foot { border-color: var(--line); }
+
+/* ---- best time to post ----
+   Deliberately quieter than .ready. The ready block is the thing that
+   leaves the studio and gets the accent; a posting window is advice, so
+   it reads as information rather than as an instruction. Everything
+   here is info-toned for that reason, and the one place a warm colour
+   appears is .timing-conflict, where two large studies disagree and the
+   operator genuinely should slow down. */
+
+/* The one-liner under a date field. */
+.timing-hint {
+    display: flex; align-items: center; gap: .5rem; flex-wrap: wrap;
+    margin: .5rem 0 0; padding: .45rem .6rem;
+    background: var(--info-wash);
+    border-radius: var(--r-sm);
+    font-size: .8rem; line-height: 1.45;
+}
+.timing-hint .ico { color: var(--info); flex: none; }
+.timing-hint > span { flex: 1 1 12rem; }
+.timing-hint .muted { color: var(--ink-faint); }
+/* Weak evidence gets a flatter ground, so a window resting on four of
+   this workspace's own posts does not look as settled as one resting on
+   two billion engagements. */
+.timing-hint.is-soft { background: var(--bg-tint); }
+.timing-hint.is-soft .ico { color: var(--ink-faint); }
+
+/* The full record. */
+.timing {
+    margin-top: 1rem;
+    border: 1px solid var(--line);
+    border-radius: var(--r-md);
+    background: var(--surface-2);
+    padding: .85rem;
+    font-size: .85rem;
+}
+.timing-head {
+    display: flex; align-items: flex-start; gap: .7rem; flex-wrap: wrap; row-gap: .4rem;
+    margin-bottom: .7rem;
+}
+.timing-head .eyebrow { display: flex; align-items: center; gap: .35em; margin: 0; }
+.timing-head .eyebrow .ico { color: var(--info); }
+.timing-head h4 { margin: .15rem 0 0; font-size: 1.05rem; font-weight: 650; }
+
+.badge.timing-high     { background: var(--success-wash); color: var(--success); }
+.badge.timing-moderate { background: var(--info-wash);    color: var(--info); }
+.badge.timing-low      { background: var(--bg-tint);      color: var(--ink-faint); }
+
+/* The bridge between advice and a date on the calendar. */
+.timing-apply {
+    display: flex; align-items: center; gap: .5rem; flex-wrap: wrap;
+    margin-bottom: .7rem; padding: .5rem .6rem;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--r-sm);
+}
+
+.timing .facts { margin-bottom: .7rem; }
+.timing-basis { margin: 0; color: var(--ink-soft); line-height: 1.55; }
+.timing .hint { margin: .6rem 0 0; font-size: .78rem; color: var(--ink-faint); line-height: 1.5; }
+
+.timing-conflict {
+    display: flex; gap: .5rem;
+    margin: .7rem 0 0; padding: .6rem .7rem;
+    background: var(--warn-wash);
+    border-radius: var(--r-sm);
+    line-height: 1.5;
+}
+.timing-conflict .ico { color: var(--warn); flex: none; margin-top: .15em; }
+
+/* Never optional, on any surface that shows a window. */
+.timing-disclaimer {
+    display: flex; gap: .5rem;
+    margin: .7rem 0 0;
+    font-size: .78rem; color: var(--ink-faint); line-height: 1.5;
+}
+.timing-disclaimer .ico { flex: none; margin-top: .15em; }
+
+.timing-sources { margin-top: .7rem; font-size: .8rem; }
+.timing-sources > summary { cursor: pointer; color: var(--ink-soft); padding: .2rem 0; }
+.timing-sources > summary:hover { color: var(--ink); }
+.timing-sources ul { margin: .5rem 0 0; padding: 0 0 0 .1rem; list-style: none; display: grid; gap: .6rem; }
+.timing-sources li { line-height: 1.45; }
+.timing-sources a { display: inline-flex; align-items: center; gap: .3em; font-weight: 550; }
+.timing-sources a .ico { width: 1em; height: 1em; }
+.timing-sources small { display: block; margin-top: .15rem; color: var(--ink-faint); font-size: .75rem; }
+
+/* The whole table, in settings. */
+.timing-table { display: grid; gap: .1rem; }
+.timing-row {
+    display: flex; align-items: center; gap: .6rem; flex-wrap: wrap;
+    padding: .55rem 0;
+    border-top: 1px solid var(--line);
+}
+.timing-row:first-child { border-top: 0; }
+.timing-row-main { flex: 1 1 12rem; min-width: 0; }
+.timing-row-main strong { display: block; font-size: .9rem; }
+.timing-row-main small { display: block; margin-top: .1rem; font-size: .78rem; color: var(--ink-faint); line-height: 1.4; }
 
 /* ---- draft history ----
    One block per stored generation, so two versions can be read against

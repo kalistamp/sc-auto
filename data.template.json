@@ -6,10 +6,11 @@
   "organization": {
     "name": "Safe Cycle Tech",
     "website": "https://safecycletech.com/",
+    "phone": "(415) 612-8520",
+    "email": "pickup@safecycletech.com",
     "serviceArea": "Bay Area, California",
     "mission": "Collect unwanted electronics, refurbish what can be saved for local students and families, and responsibly recycle the rest.",
     "voice": "Neighborly, practical, trustworthy, specific, and never pushy.",
-    "defaultCta": "Call or text (415) 612-8520 to schedule a free pickup.",
     "facts": [
       "Pickup is free across the Bay Area.",
       "Working devices are refurbished for local students and underprivileged families.",
@@ -22,7 +23,8 @@
       "Do not identify students, families, or donors without explicit written permission.",
       "Do not claim every donated device is refurbished; unusable equipment is responsibly recycled.",
       "Do not promise a pickup window, price, or tax outcome that has not been confirmed."
-    ]
+    ],
+    "cta": "Check out https://safecycletech.com to learn more about our organization and how we’re helping the community.\n\nCall or text (415) 612-8520 or email pickup@safecycletech.com to schedule a pickup."
   },
   "platforms": [
     {

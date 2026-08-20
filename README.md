@@ -276,6 +276,39 @@ appeared under its day in the Queue while the tile said **Scheduled 0**.
 
 ---
 
+## Best time to post
+
+Every place you can put a date on a post now says when the research says to put
+it: on the draft card under *Planned date*, and in the Schedule dialog with the
+reasoning open underneath. **Use this time** moves the field to the next real
+occurrence of that window, and the Schedule dialog starts on it rather than on
+an arbitrary "tomorrow at 10".
+
+Settings holds the whole table at once, with every source behind it.
+
+The windows live in [`js/timing.js`](js/timing.js) and nothing fetches them at
+runtime. Two things about them are deliberate:
+
+**They are labelled by how good the evidence is, not by how confident the
+sentence sounds.** Facebook and Instagram rest on Sprout Social's 2026 study
+(~2 billion engagements, ~307,000 profiles) and Buffer's (52 million posts).
+Nextdoor rests on Nextdoor's own guidance, which is first-party but publishes
+no sample size and dates to 2020. Reddit rests on no large study at all,
+because none exists — neither Sprout nor Buffer covers it — so it is marked
+**weak evidence** and says on its face that the real unit is the subreddit.
+
+**Where two large studies disagree, both are shown.** On Facebook they do:
+Sprout finds afternoons strongest, Buffer finds mornings strongest, and they
+agree only on the day. The dialog says so and offers the losing window as the
+second option, because an operator who knows the sources conflict will run a
+test and one handed a single confident number will not.
+
+None of this is a prediction about this organization's audience. It is an
+average over other people's, shown with that sentence attached every time.
+Once the workspace holds a season of publication records, they beat it.
+
+---
+
 ## Guardrails
 
 The model is given the organization's approved facts and standing rules, and
@@ -364,6 +397,7 @@ js/voice.js           House style: the prompt's voice rules and the draft scanne
 js/settings.js        Per-device credentials and preferences
 js/sync.js            Gist store: load, debounced save, conflicts, history
 js/theme.js           Light / dark / system
+js/timing.js          Best time to post: the research table and its citations
 js/ui.js              Escaping, formatting, modals, toasts, focus retention
 js/app.js             Views and interaction
 data.template.json    Seed contents for the gist file

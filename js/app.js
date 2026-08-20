@@ -22,10 +22,11 @@ import {
   findSimilarPosts, getPlatform,
   isOverdue, isQueued, isScheduled, listPlatforms, migrateData, normalizePlatform, nowIso,
   platformKeys, purgeExpiredDeleted, pushGeneration, removeDeletedForever, restoreDeletedPost,
-  setActivePlatforms, snapshotGeneration, softDeletePost, splitTags, textSimilarity,
+  setActivePlatforms, setOrganization, snapshotGeneration, softDeletePost, splitTags, textSimilarity,
   uniquePlatformKey, validateData
 } from "./data.js";
 import { buildCopyText, platformHomeUrl, platformLabel, variantChecks } from "./platforms.js";
+import { ctaCoverage } from "./signature.js";
 import { PROMPT_VERSION, ProviderError, generateDrafts, listModels, modelsMatch, receiptState } from "./providers.js";
 import {
   PROVIDERS, PROVIDER_KEYS, clearCredentials, clearDraftBrief, fingerprint, readCredentials,
@@ -35,7 +36,11 @@ import {
 import { SyncError, Workspace } from "./sync.js";
 import { THEMES, applyTheme, currentTheme, setTheme, toggleTheme, watchSystemTheme } from "./theme.js";
 import {
-  closeModal, confirmAction, copyText, downloadFile, el, esc, fmtDateTime, fmtDayHeading,
+  TIMING_DISCLAIMER, TIMING_RESEARCH_DATE, bestTimeFor, describeSlot, formatWindow,
+  nextSlot, nextSlotIso, sourcesFor
+} from "./timing.js";
+import {
+  closeModal, confirmAction, copyText, downloadFile, el, esc, fmtDate, fmtDateTime, fmtDayHeading,
   fmtTime, fromLocalInput, icon, openModal, plural, relTime, safeUrl, toLocalInput,
   toast, withFocusRetained
 } from "./ui.js";
@@ -115,6 +120,10 @@ function boot() {
 function adoptData(data) {
   state.data = data;
   setActivePlatforms(data?.platforms);
+  /* buildCopyText() appends the organization's call to action, so the
+     record it reads has to be swapped here too — for exactly the reasons
+     above, and on exactly the same paths. */
+  setOrganization(data?.organization);
   return data;
 }
 
@@ -676,10 +685,6 @@ function renderCompose() {
                   <input class="input" id="b-objective" name="objective" maxlength="220" placeholder="The model infers it from the topic" value="${esc(brief.objective)}">
                 </div>
                 <div class="field">
-                  <label for="b-cta">Call to action</label>
-                  <input class="input" id="b-cta" name="cta" maxlength="240" value="${esc(brief.cta || state.data.organization.defaultCta)}">
-                </div>
-                <div class="field">
                   <label for="b-tone">Tone</label>
                   <select class="input" id="b-tone" name="tone">
                     ${["Neighborly and direct", "Warm and hopeful", "Educational and reassuring", "Urgent but not pushy", "Partnership-focused"]
@@ -739,7 +744,7 @@ function renderCompose() {
 function emptyBrief() {
   return {
     topic: "", campaign: "", objective: "", audience: "", keyMessage: "",
-    cta: "", tone: "Neighborly and direct", scheduledAt: "", tags: "", mustInclude: "",
+    tone: "Neighborly and direct", scheduledAt: "", tags: "", mustInclude: "",
     platforms: ["reddit", "facebook", "nextdoor"]
   };
 }
@@ -764,7 +769,6 @@ function readBriefForm() {
     campaign: (values.get("campaign") || "").trim(),
     objective: (values.get("objective") || "").trim(),
     audience: (values.get("audience") || "").trim(),
-    cta: (values.get("cta") || "").trim(),
     tone: values.get("tone") || "Neighborly and direct",
     scheduledAt: fromLocalInput(values.get("scheduledAt")),
     tags: (values.get("tags") || "").trim(),
@@ -1492,6 +1496,7 @@ function variantCard(post, variant) {
         <input class="input" id="s-${esc(variant.id)}" type="datetime-local" data-variant="${esc(variant.id)}" data-field="scheduledAt"
                value="${esc(toLocalInput(variant.scheduledAt))}" ${published ? "readonly" : ""}>
         <p class="hint">A reminder for you. It puts this in the Queue; nothing posts on a timer.</p>
+        ${published ? "" : timingHint(variant.platform, { withApply: true })}
       </div>
 
       ${variant.notes ? `<ul class="notes is-info"><li>${icon("info")}<span>${esc(variant.notes)}</span></li></ul>` : ""}
@@ -1585,9 +1590,9 @@ function readyBody(variant, meta) {
    Kept in one node so the caret above it is never disturbed. */
 function variantMeta(variant) {
   const meta = getPlatform(variant.platform);
-  const checks = variantChecks(variant);
+  const checks = variantChecks(variant, state.data.organization);
   return `
-    ${meterFor(variant.body.length, meta.bodyMax, meta.soft)}
+    ${meterFor(buildCopyText(variant).length, meta.bodyMax, meta.soft)}
     ${checks.length ? `<ul class="notes">${checks.map((check) =>
       `<li>${icon(check.level === "error" ? "alert" : "info")}<span>${esc(check.text)}</span></li>`).join("")}</ul>` : ""}`;
 }
@@ -1600,6 +1605,154 @@ function meterFor(length, max, soft = 0) {
     <span class="meter-track"><span class="meter-fill" style="width:${(ratio * 100).toFixed(1)}%"></span></span>
     <span>${length.toLocaleString()}${soft ? ` / ~${soft.toLocaleString()}` : ` / ${max.toLocaleString()}`}</span>
   </div>`;
+}
+
+/* ============================================================
+   BEST TIME TO POST
+
+   js/timing.js holds the research; these three functions are the only
+   places it reaches the screen, at three different depths:
+
+     · timingHint()   — one line under a date field. The answer.
+     · timingDetail() — the full record, with the evidence and its
+                        weaknesses. Shown in the schedule dialog and in
+                        the dialog the hint's button opens.
+     · timingSources()— the citations, so no window is ever shown
+                        without a way to check where it came from.
+
+   The disclaimer is not optional decoration on any of them. A posting
+   window averaged over 307,000 other accounts is a hypothesis about
+   this organization, and an interface that presents it as an answer
+   would be making a claim the data does not support. Every surface
+   below carries that sentence, and tests/timing.test.mjs checks that
+   they still do.
+   ============================================================ */
+
+/* The one-line answer, for use under a date field. `withApply` adds the
+   button that moves the field to the next real occurrence of the
+   window — only meaningful where there is a field to move. */
+function timingHint(platformKey, { withApply = false } = {}) {
+  const timing = bestTimeFor(platformKey);
+  const slot = nextSlot(timing.primary);
+  return `<p class="timing-hint${timing.confidence === "low" ? " is-soft" : ""}">
+    ${icon("clock")}
+    <span><strong>Best time to post:</strong> ${esc(timing.headline)}${timing.generic
+      ? ` <span class="muted">(cross-platform average)</span>` : ""}</span>
+    ${withApply && slot ? `<button class="btn btn-quiet btn-sm" type="button" data-act="timing-apply"
+            data-at="${esc(toLocalInput(slot.toISOString()))}"
+            title="Move the date to the next one of these">Use ${esc(describeSlot(slot))}</button>` : ""}
+    <button class="btn btn-quiet btn-sm" type="button" data-act="timing-detail"
+            data-platform-key="${esc(platformKey)}">Why?</button>
+  </p>`;
+}
+
+/* The whole record. Ordered so the answer is first and the reasons why
+   it might be wrong are right behind it, rather than buried under the
+   citations. */
+function timingDetail(platformKey, { withApply = false } = {}) {
+  const timing = bestTimeFor(platformKey);
+  const slot = nextSlot(timing.primary);
+  const rows = [
+    timing.secondary
+      ? ["Second option", formatWindow(timing.secondary)]
+      : null,
+    timing.avoid ? ["Avoid", timing.avoid] : null,
+    timing.cadence ? ["How often", timing.cadence] : null,
+    timing.vertical ? ["Worth knowing", timing.vertical] : null
+  ].filter(Boolean);
+
+  return `<section class="timing" aria-label="Best time to post">
+    <header class="timing-head">
+      <div>
+        <p class="eyebrow">${icon("clock")} Best time to post</p>
+        <h4>${esc(timing.headline)}</h4>
+      </div>
+      <span class="spacer"></span>
+      <span class="badge timing-${esc(timing.confidence)}" title="${esc(timing.confidenceNote)}">${esc(timing.confidenceLabel)}</span>
+    </header>
+
+    ${withApply && slot ? `
+      <div class="timing-apply">
+        <span>Next one: <strong>${esc(describeSlot(slot))}</strong></span>
+        <span class="spacer"></span>
+        <button class="btn btn-ghost btn-sm" type="button" data-act="timing-apply"
+                data-at="${esc(toLocalInput(slot.toISOString()))}">${icon("calendar")} Use this time</button>
+      </div>` : ""}
+
+    ${rows.length ? `<dl class="facts">${rows.map(([term, value]) =>
+      `<dt>${esc(term)}</dt><dd>${esc(value)}</dd>`).join("")}</dl>` : ""}
+
+    <p class="timing-basis">${esc(timing.basis)}</p>
+    ${timing.conflict ? `<p class="timing-conflict">${icon("alert")}<span><strong>The sources disagree.</strong> ${esc(timing.conflict)}</span></p>` : ""}
+    ${timing.caveat ? `<p class="hint">${esc(timing.caveat)}</p>` : ""}
+
+    <p class="timing-disclaimer">${icon("info")}<span>${esc(TIMING_DISCLAIMER)}</span></p>
+
+    ${timingSources(platformKey)}
+  </section>`;
+}
+
+/* Citations. Links open in a new tab because the studio is a single
+   page holding unsaved edits, and navigating away from it to read a
+   blog post is not a trade anybody wants to make. */
+function timingSources(platformKey) {
+  const sources = sourcesFor(platformKey);
+  if (!sources.length) return "";
+  return `<details class="timing-sources">
+    <summary>${plural(sources.length, "source")} · checked ${esc(fmtDate(`${TIMING_RESEARCH_DATE}T12:00:00`))}</summary>
+    <ul>
+      ${sources.map((source) => `<li>
+        <a href="${esc(safeUrl(source.url))}" target="_blank" rel="noopener noreferrer">
+          ${esc(source.org)} — ${esc(source.title)} ${icon("external")}
+        </a>
+        <small>${esc(source.method)}${source.published ? ` Published ${esc(source.published)}.` : ""}</small>
+      </li>`).join("")}
+    </ul>
+  </details>`;
+}
+
+function openTimingDialog(platformKey) {
+  openModal(`
+    <div class="modal-inner">
+      <div class="modal-head">
+        <div>
+          <h2>${esc(platformLabel(platformKey))} — when to post</h2>
+          <p>Where this window comes from, and where it is weak.</p>
+        </div>
+        <button class="icon-btn" type="button" data-close aria-label="Close">${icon("x")}</button>
+      </div>
+      <div class="modal-scroll">${timingDetail(platformKey)}</div>
+      <div class="modal-foot">
+        <span class="spacer"></span>
+        <button class="btn btn-primary" type="button" data-close>Close</button>
+      </div>
+    </div>`);
+}
+
+/* Moves the nearest date field to the recommended slot. Nearest rather
+   than by id because there are two of them — the one on the draft card
+   and the one in the schedule dialog — and both use this button.
+
+   A `change` event is dispatched rather than the value being written
+   into the workspace here: the field on the draft card is already wired
+   through onChange, which is also what promotes an approved variant to
+   scheduled. Going around that handler would update the box and leave
+   the record behind.
+
+   Focus is restored by id AFTER the dispatch, not on the node this
+   function is holding. onChange re-renders the whole view, so on the
+   draft card that node is detached by the time the dispatch returns and
+   focusing it would put the caret nowhere. In the schedule dialog no
+   re-render happens and the same lookup finds the same element. */
+function applyTimingSlot(node) {
+  const field = node.closest(".field, .modal-inner, .variant")?.querySelector('input[type="datetime-local"]')
+    || el('input[type="datetime-local"]');
+  if (!field || !node.dataset.at) return;
+
+  const fieldId = field.id;
+  field.value = node.dataset.at;
+  field.dispatchEvent(new Event("change", { bubbles: true }));
+  if (fieldId) el(`#${CSS.escape(fieldId)}`)?.focus();
 }
 
 /* ============================================================
@@ -1645,16 +1798,30 @@ function renderSettings() {
           </div>
         </section>
 
+        ${timingCard()}
+
         <form class="card" id="org-form" style="margin-top:1rem">
           <header class="card-head"><div><h3>Organization</h3><p>Standing context for every draft</p></div></header>
           <div class="card-body">
             <div class="form-grid">
               <div class="field"><label for="o-name">Name</label><input class="input" id="o-name" name="name" value="${esc(org.name)}" required></div>
               <div class="field"><label for="o-site">Website</label><input class="input" id="o-site" name="website" type="url" value="${esc(org.website)}"></div>
+              <div class="field"><label for="o-phone">Phone</label><input class="input" id="o-phone" name="phone" type="tel" value="${esc(org.phone || "")}"></div>
+              <div class="field"><label for="o-email">Email</label><input class="input" id="o-email" name="email" type="email" value="${esc(org.email || "")}"></div>
               <div class="field full"><label for="o-area">Service area</label><input class="input" id="o-area" name="serviceArea" value="${esc(org.serviceArea)}"></div>
               <div class="field full"><label for="o-mission">Mission</label><textarea class="textarea" id="o-mission" name="mission" required>${esc(org.mission)}</textarea></div>
               <div class="field full"><label for="o-voice">Voice</label><input class="input" id="o-voice" name="voice" value="${esc(org.voice)}"></div>
-              <div class="field full"><label for="o-cta">Default call to action</label><input class="input" id="o-cta" name="defaultCta" value="${esc(org.defaultCta)}"></div>
+            </div>
+
+            <div class="field">
+              <label for="o-cta">Call to action</label>
+              <textarea class="textarea" id="o-cta" name="cta">${esc(org.cta || "")}</textarea>
+              <p class="hint">
+                Added to the bottom of every post exactly as written, after the model is done — it never writes this itself,
+                so the wording cannot drift between posts. It is not part of the draft you edit; the ready-to-paste block on
+                each version shows it in place. Clear this field to append nothing.
+              </p>
+              ${ctaCoverageHint(org)}
             </div>
 
             <div class="field">
@@ -1754,6 +1921,73 @@ function renderSettings() {
    Retired platforms — a platform removed while old posts still reference
    it — are shown greyed out and cannot be switched on. They exist so the
    history stays readable; see migratePlatforms in js/data.js. */
+/* The whole timing table in one place, plus the bibliography.
+
+   The per-draft hint answers "when"; this answers "on what basis", for
+   every platform at once, without having to open six dialogs. It lists
+   the operator's own platform list rather than the research table, so a
+   platform they added shows up honestly labelled as having no
+   platform-specific research behind its window. */
+function timingCard() {
+  const rows = listPlatforms();
+  const cited = new Map();
+  for (const platform of rows) {
+    for (const source of sourcesFor(platform.key)) cited.set(source.id, source);
+  }
+
+  return `<section class="card" style="margin-top:1rem">
+    <header class="card-head">
+      <div>
+        <h3>${icon("clock")} Best time to post</h3>
+        <p>Research-backed windows, per platform</p>
+      </div>
+    </header>
+    <div class="card-body">
+      <p class="hint" style="margin-bottom:.9rem">${esc(TIMING_DISCLAIMER)}</p>
+
+      <div class="timing-table">
+        ${rows.map((platform) => {
+          const timing = bestTimeFor(platform.key);
+          return `<div class="timing-row">
+            <span class="pip" style="background:${esc(platform.color)}">${esc(platform.label[0])}</span>
+            <span class="timing-row-main">
+              <strong>${esc(platform.label)}</strong>
+              <small>${esc(timing.headline)}${timing.generic ? " — cross-platform average, no research specific to this one" : ""}</small>
+            </span>
+            <span class="badge timing-${esc(timing.confidence)}" title="${esc(timing.confidenceNote)}">${esc(timing.confidenceLabel)}</span>
+            <button class="btn btn-quiet btn-sm" type="button" data-act="timing-detail"
+                    data-platform-key="${esc(platform.key)}">Details</button>
+          </div>`;
+        }).join("")}
+      </div>
+
+      <p class="hint" style="margin-top:.9rem">
+        Two of these platforms have no large study behind them at all. Reddit's window rests on this workspace's own
+        results and on how local communities behave, not on a dataset; Nextdoor's comes from Nextdoor, which publishes
+        no sample size. Both say so when you open their details.
+      </p>
+
+      <details class="timing-sources" style="margin-top:.8rem">
+        <summary>All ${plural(cited.size, "source")} · checked ${esc(fmtDate(`${TIMING_RESEARCH_DATE}T12:00:00`))}</summary>
+        <ul>
+          ${[...cited.values()].map((source) => `<li>
+            <a href="${esc(safeUrl(source.url))}" target="_blank" rel="noopener noreferrer">
+              ${esc(source.org)} — ${esc(source.title)} ${icon("external")}
+            </a>
+            <small>${esc(source.method)}${source.published ? ` Published ${esc(source.published)}.` : ""}</small>
+          </li>`).join("")}
+        </ul>
+      </details>
+
+      <p class="hint" style="margin-top:.8rem">
+        These are averages over other people's audiences. Once this workspace holds a season of publication records,
+        compare them against what actually happened here — inquiries and pickups booked, not reactions — and let that
+        win. That is what the platforms' own tools do; Sprout's reads sixteen weeks of a single audience.
+      </p>
+    </div>
+  </section>`;
+}
+
 function platformRow(platform) {
   const usedBy = platformUsage(platform.key);
   const link = platform.homeUrl;
@@ -2368,18 +2602,32 @@ function openScheduleDialog(variantId) {
         <div class="field">
           <label for="sc-at">Date and time</label>
           <input class="input" id="sc-at" name="at" type="datetime-local" required
-                 value="${esc(toLocalInput(variant.scheduledAt || defaultScheduleTime()))}" data-autofocus>
+                 value="${esc(toLocalInput(variant.scheduledAt || defaultScheduleTime(variant.platform)))}" data-autofocus>
         </div>
+        ${timingDetail(variant.platform, { withApply: true })}
       </div>
       <div class="modal-foot">
         <span class="spacer"></span>
         <button class="btn btn-ghost" type="button" data-close>Cancel</button>
         <button class="btn btn-primary" type="submit">Add to queue</button>
       </div>
-    </form>`, { size: "sm" });
+    </form>`);
 }
 
-function defaultScheduleTime() {
+/* What the date box starts on when nothing has been planned yet.
+
+   It used to be "tomorrow at 10am", which was a number with nothing
+   behind it. Now it is the next occurrence of the platform's researched
+   window — so the default the operator accepts without thinking is at
+   least the defensible one, and the reasoning for it is on screen
+   directly underneath.
+
+   The old behaviour survives as the fallback, for the case where a
+   hand-edited record leaves a platform with no usable window. */
+function defaultScheduleTime(platformKey) {
+  const suggested = nextSlotIso(platformKey);
+  if (suggested) return suggested;
+
   const date = new Date();
   date.setDate(date.getDate() + 1);
   date.setHours(10, 0, 0, 0);
@@ -2594,7 +2842,6 @@ async function rerunDrafts() {
         campaign: post.campaign,
         objective: post.objective,
         audience: post.audience,
-        cta: state.data.organization.defaultCta,
         tone: "",
         platforms,
         guidance: Object.fromEntries(platforms.map((key) => [key, getPlatform(key).guidance || ""])),
@@ -2899,6 +3146,8 @@ function handleAction(act, node, event) {
     case "toggle-approve": return toggleApprove(variantId);
     case "approve-all": return approveAll();
     case "schedule": return openScheduleDialog(variantId);
+    case "timing-detail": return openTimingDialog(node.dataset.platformKey);
+    case "timing-apply": return applyTimingSlot(node);
     case "publish": return openPublishDialog(variantId);
     case "rerun-drafts": return rerunDrafts();
     case "draft-history": return openDraftHistoryDialog();
@@ -2963,17 +3212,17 @@ function onInput(event) {
     post.updatedAt = nowIso();
     /* Patch only the blocks under the field being typed in, so the caret
        above them is never touched. */
-    if (field === "body") {
-      const holder = document.getElementById(`meta-${variantId}`);
-      if (holder) holder.innerHTML = variantMeta(variant);
-    }
     if (field === "title") {
       const meter = target.parentElement?.querySelector(".meter");
       if (meter) meter.outerHTML = meterFor(variant.title.length, getPlatform(variant.platform).titleMax);
     }
     /* Both fields feed the copy, so the preview of what gets pasted
-       follows either one. */
+       follows either one — and so does the meter above it, which counts
+       the whole outgoing post now that the CTA and the hashtags are part
+       of it. Typing a hashtag can put a draft over the limit. */
     if (field === "body" || field === "hashtags") {
+      const holder = document.getElementById(`meta-${variantId}`);
+      if (holder) holder.innerHTML = variantMeta(variant);
       const preview = document.getElementById(`ready-${variantId}`);
       if (preview) preview.innerHTML = readyBody(variant, getPlatform(variant.platform));
     }
@@ -3156,7 +3405,7 @@ function toggleApprove(variantId) {
   const { post, variant } = findVariant(variantId);
   if (!variant || variant.status === "published") return;
   if (variant.status === "draft") {
-    const blocking = variantChecks(variant).filter((check) => check.level === "error");
+    const blocking = variantChecks(variant, state.data.organization).filter((check) => check.level === "error");
     if (blocking.length) return toast(blocking[0].text, { kind: "error" });
     /* A date was already set — on the brief, or in the field above — so
        approving it puts it on the calendar rather than leaving it in the
@@ -3178,7 +3427,7 @@ function approveAll() {
   const blocked = [];
   for (const variant of post.variants) {
     if (variant.status !== "draft") continue;
-    const errors = variantChecks(variant).filter((check) => check.level === "error");
+    const errors = variantChecks(variant, state.data.organization).filter((check) => check.level === "error");
     if (errors.length) { blocked.push(platformLabel(variant.platform)); continue; }
     variant.status = variant.scheduledAt ? "scheduled" : "approved";
   }
@@ -3243,18 +3492,34 @@ function saveExternalPost(form) {
   toast("Added to the record", { kind: "good" });
 }
 
+/* Says so when the CTA text and the contact fields have drifted apart.
+   They are separate on purpose — the CTA is copy and the fields are the
+   record — which means an operator can change the phone number in one
+   and not the other, and start publishing the old one under every post.
+   A note rather than a block: the wording is theirs. */
+function ctaCoverageHint(org) {
+  const missing = ctaCoverage(org);
+  if (!missing.length) return "";
+  const names = missing.map((route) => `${route.label} (${esc(route.display)})`);
+  const list = names.length > 1 ? `${names.slice(0, -1).join(", ")} and ${names.at(-1)}` : names[0];
+  return `<p class="hint" style="color:var(--warn)">This does not mention the ${list} recorded above, so no post will carry ${names.length > 1 ? "them" : "it"}.</p>`;
+}
+
 function saveOrganization(form) {
   const values = new FormData(form);
   Object.assign(state.data.organization, {
     name: (values.get("name") || "").trim(),
     website: (values.get("website") || "").trim(),
+    phone: (values.get("phone") || "").trim(),
+    email: (values.get("email") || "").trim(),
     serviceArea: (values.get("serviceArea") || "").trim(),
     mission: (values.get("mission") || "").trim(),
     voice: (values.get("voice") || "").trim(),
-    defaultCta: (values.get("defaultCta") || "").trim(),
+    cta: (values.get("cta") || "").trim(),
     facts: String(values.get("facts") || "").split("\n").map((line) => line.trim()).filter(Boolean),
     prohibitedClaims: String(values.get("prohibitedClaims") || "").split("\n").map((line) => line.trim()).filter(Boolean)
   });
+  setOrganization(state.data.organization);
   addActivity(state.data, "settings", "Updated the organization profile");
   commit();
   toast("Organization saved", { kind: "good" });

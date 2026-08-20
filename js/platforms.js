@@ -29,7 +29,8 @@
    tests/static.test.mjs enforces that.
    ============================================================ */
 
-import { getPlatform } from "./data.js";
+import { getOrganization, getPlatform } from "./data.js";
+import { ctaBlock, duplicateFindings } from "./signature.js";
 import { scanVoice } from "./voice.js";
 
 export function platformLabel(key) {
@@ -42,8 +43,13 @@ export function platformColor(key) {
 
 /* Checks, not blocks. Every one of these is something a person should
    look at before publishing; none of them stop a post from going out,
-   because the operator knows things this app does not. */
-export function variantChecks(variant) {
+   because the operator knows things this app does not.
+
+   `organization` defaults to the active workspace record and only feeds
+   the duplicate-contact check: without one there is no call to action to
+   duplicate, so that check is skipped rather than guessed at. Every
+   other check here works on the variant alone. */
+export function variantChecks(variant, organization = getOrganization()) {
   /* Always an object, even for a platform that has since been removed —
      see getPlatform. The `?.` guards below are kept anyway: they cost
      nothing and this function is called on hand-editable data. */
@@ -51,11 +57,19 @@ export function variantChecks(variant) {
   const checks = [];
   const body = variant.body || "";
 
+  /* Emptiness is about what the operator wrote, not about what gets
+     pasted: a draft with nothing in it but an appended CTA is empty. */
   if (!body.trim()) checks.push({ level: "error", text: "This draft has no body text yet." });
 
-  if (meta?.bodyMax && body.length > meta.bodyMax) {
-    checks.push({ level: "error", text: `${body.length - meta.bodyMax} characters over ${meta.label}'s limit of ${meta.bodyMax.toLocaleString()}.` });
-  } else if (meta?.soft && body.length > meta.soft) {
+  /* Length, though, is about what gets pasted. The CTA and the hashtags
+     both go out with the post and both count against the platform's
+     ceiling, so measuring variant.body alone would clear a draft that is
+     actually over the limit. */
+  const outgoing = buildCopyText(variant).length;
+
+  if (meta?.bodyMax && outgoing > meta.bodyMax) {
+    checks.push({ level: "error", text: `${outgoing - meta.bodyMax} characters over ${meta.label}'s limit of ${meta.bodyMax.toLocaleString()}.` });
+  } else if (meta?.soft && outgoing > meta.soft) {
     checks.push({ level: "warn", text: `Longer than most ${meta.label} posts. Consider trimming to about ${meta.soft.toLocaleString()} characters.` });
   }
 
@@ -101,6 +115,12 @@ export function variantChecks(variant) {
     }
   }
 
+  /* Contact details the appended CTA already carries. Above the voice
+     findings because a post that prints the phone number twice is a
+     content problem, and the voice findings are style advice the
+     operator may reasonably ignore. */
+  checks.push(...duplicateFindings(body, organization));
+
   checks.push(...scanVoice(body));
 
   return checks;
@@ -126,10 +146,23 @@ export function platformHomeUrl(target) {
 }
 
 /* Exactly what goes on the clipboard, and exactly what gets recorded as
-   published — one function, so those two can never drift apart. */
+   published — one function, so those two can never drift apart.
+
+   This is also the single place the organization's call to action is
+   added, which is what keeps it out of variant.body and therefore out of
+   the re-run loop: a CTA stored in the body would be fed back to the
+   model as a previous draft, come back inside the new one, and be
+   appended again on top of itself. See js/signature.js.
+
+   The CTA comes from the active organization rather than an argument
+   because this is called from a dozen places that have no reason to hold
+   the workspace record, and because the boot tests pin this signature.
+
+   Order is body, then CTA, then hashtags — the tags are metadata and
+   belong under everything a person reads. */
 export function buildCopyText(variant) {
   const tags = (variant.hashtags || [])
     .map((tag) => (tag.startsWith("#") ? tag : `#${tag}`))
     .join(" ");
-  return [variant.body?.trim(), tags].filter(Boolean).join("\n\n");
+  return [variant.body?.trim(), ctaBlock(getOrganization()), tags].filter(Boolean).join("\n\n");
 }
