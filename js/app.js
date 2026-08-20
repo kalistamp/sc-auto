@@ -484,14 +484,16 @@ function renderOverview() {
     <h2 class="section-title">${icon("external")} Your platforms</h2>
     <section class="card">
       <header class="card-head">
-        <div><h3>Front doors</h3><p>Open a platform to log in and paste. Nothing is posted for you.</p></div>
+        <div><h3>When to post, and where</h3><p>A research-backed window for each platform, and its front door. Nothing is posted for you.</p></div>
         <span class="spacer"></span>
         <button class="btn btn-quiet btn-sm" type="button" data-act="platform-add">${icon("plus")} Add platform</button>
         <button class="btn btn-quiet btn-sm" type="button" data-nav="settings">Manage ${icon("arrow-right")}</button>
       </header>
       <div class="card-body">
         ${launcherPlatforms().length
-          ? `<div class="launcher">${launcherPlatforms().map(platformLauncher).join("")}</div>`
+          ? `<div class="launcher">${launcherPlatforms().map(platformLauncher).join("")}</div>
+             <p class="hint" style="margin-top:.9rem">${esc(TIMING_DISCLAIMER)}</p>
+             ${timingBibliography(launcherPlatforms().map((platform) => platform.key))}`
           : emptyBlock("external", "No platforms yet", "Add the first one and its login page is a click away from here.", { action: "Add platform", act: "platform-add" })}
       </div>
     </section>
@@ -519,7 +521,7 @@ function launcherPlatforms() {
   return listPlatforms({ enabledOnly: true, includeRetired: false });
 }
 
-/* One front door.
+/* One front door, and the hour to walk through it.
 
    This exists because the Open buttons were originally only in two places:
    the bottom of a long settings page, and a draft you had already
@@ -530,24 +532,75 @@ function launcherPlatforms() {
 
    A platform with no URL still appears, greyed, saying why. Hiding it
    would make the gap invisible exactly when the operator is wondering
-   where their platform went. */
+   where their platform went. It still carries its window: when to post
+   is worth knowing whether or not this app holds the login page.
+
+   SHAPE: a wrapping .launch-tile holding the .launch link and the
+   timing row as siblings, rather than one big <a>. The timing row
+   carries a button, and a button inside an anchor is invalid HTML —
+   browsers drop the inner element, so "Why?" would simply never be
+   clickable. Same constraint, same resolution as queueItem below.
+
+   The link keeps the .launch class it always had. tests/boot.test.mjs
+   pins it, and rightly: what that test protects is that a front door is
+   a real <a href> rather than a scripted open, and that is exactly as
+   true after this rearrangement as before. */
 function platformLauncher(platform) {
   const label = esc(platform.label);
-  const pip = `<span class="pip" style="background:${esc(platform.color)}">${esc(platform.label[0])}</span>`;
-  const meta = esc(platform.blurb || platform.note || "");
+  const timing = bestTimeFor(platform.key);
+  const face = `
+    <span class="pip" style="background:${esc(platform.color)}">${esc(platform.label[0])}</span>
+    <span class="launch-main">
+      <strong>${label}</strong>
+      <small>${esc(platform.blurb || platform.note || "") || "No link set"}</small>
+    </span>`;
 
-  if (!platform.homeUrl) {
-    return `<div class="launch is-flat" title="No link set for ${label}">
-      ${pip}
-      <span class="launch-main"><strong>${label}</strong><small>${meta || "No link set"}</small></span>
-    </div>`;
+  return `<div class="launch-tile${platform.homeUrl ? "" : " is-flat"}">
+    ${platform.homeUrl
+      ? `<a class="launch" href="${esc(platform.homeUrl)}" target="_blank" rel="noopener noreferrer"
+            title="Opens ${label} in a new tab so you can log in and paste">${face}${icon("external", "launch-go")}</a>`
+      : `<div class="launch" title="No link set for ${label}">${face}</div>`}
+
+    <div class="launch-when${timing.confidence === "low" ? " is-soft" : ""}">
+      ${icon("clock")}
+      <span class="launch-window">${esc(timing.headline)}</span>
+      <span class="spacer"></span>
+      <button class="btn btn-quiet btn-sm" type="button" data-act="timing-detail"
+              data-platform-key="${esc(platform.key)}"
+              title="Where this window comes from, and where it is weak">Why?</button>
+    </div>
+  </div>`;
+}
+
+/* The citations for a set of platforms, deduplicated.
+
+   One function for both callers: a single platform's dialog passes one
+   key, the Overview card passes every platform it just listed. They only
+   ever differed in their summary line, and two copies of a citation
+   renderer is exactly the kind of thing that drifts until one of them
+   quietly stops matching the sources.
+
+   Links open in a new tab because the studio is a single page holding
+   unsaved edits, and navigating away from it to read a blog post is not
+   a trade anybody wants to make. */
+function timingBibliography(platformKeys, { lead = "Where these times come from · " } = {}) {
+  const cited = new Map();
+  for (const key of platformKeys) {
+    for (const source of sourcesFor(key)) cited.set(source.id, source);
   }
+  if (!cited.size) return "";
 
-  return `<a class="launch" href="${esc(platform.homeUrl)}" target="_blank" rel="noopener noreferrer">
-    ${pip}
-    <span class="launch-main"><strong>${label}</strong><small>${meta}</small></span>
-    ${icon("external", "launch-go")}
-  </a>`;
+  return `<details class="timing-sources">
+    <summary>${esc(lead)}${plural(cited.size, "source")}, checked ${esc(fmtDate(`${TIMING_RESEARCH_DATE}T12:00:00`))}</summary>
+    <ul>
+      ${[...cited.values()].map((source) => `<li>
+        <a href="${esc(safeUrl(source.url))}" target="_blank" rel="noopener noreferrer">
+          ${esc(source.org)} — ${esc(source.title)} ${icon("external")}
+        </a>
+        <small>${esc(source.method)}${source.published ? ` Published ${esc(source.published)}.` : ""}</small>
+      </li>`).join("")}
+    </ul>
+  </details>`;
 }
 
 function greeting() {
@@ -1617,8 +1670,10 @@ function meterFor(length, max, soft = 0) {
      · timingDetail() — the full record, with the evidence and its
                         weaknesses. Shown in the schedule dialog and in
                         the dialog the hint's button opens.
-     · timingSources()— the citations, so no window is ever shown
-                        without a way to check where it came from.
+     · timingBibliography() — the citations, so no window is ever
+                        shown without a way to check where it came from.
+                        Takes a list of platforms, so it serves both one
+                        platform's dialog and the whole Overview card.
 
    The disclaimer is not optional decoration on any of them. A posting
    window averaged over 307,000 other accounts is a hypothesis about
@@ -1688,27 +1743,8 @@ function timingDetail(platformKey, { withApply = false } = {}) {
 
     <p class="timing-disclaimer">${icon("info")}<span>${esc(TIMING_DISCLAIMER)}</span></p>
 
-    ${timingSources(platformKey)}
+    ${timingBibliography([platformKey], { lead: "" })}
   </section>`;
-}
-
-/* Citations. Links open in a new tab because the studio is a single
-   page holding unsaved edits, and navigating away from it to read a
-   blog post is not a trade anybody wants to make. */
-function timingSources(platformKey) {
-  const sources = sourcesFor(platformKey);
-  if (!sources.length) return "";
-  return `<details class="timing-sources">
-    <summary>${plural(sources.length, "source")} · checked ${esc(fmtDate(`${TIMING_RESEARCH_DATE}T12:00:00`))}</summary>
-    <ul>
-      ${sources.map((source) => `<li>
-        <a href="${esc(safeUrl(source.url))}" target="_blank" rel="noopener noreferrer">
-          ${esc(source.org)} — ${esc(source.title)} ${icon("external")}
-        </a>
-        <small>${esc(source.method)}${source.published ? ` Published ${esc(source.published)}.` : ""}</small>
-      </li>`).join("")}
-    </ul>
-  </details>`;
 }
 
 function openTimingDialog(platformKey) {
@@ -1797,8 +1833,6 @@ function renderSettings() {
             </p>
           </div>
         </section>
-
-        ${timingCard()}
 
         <form class="card" id="org-form" style="margin-top:1rem">
           <header class="card-head"><div><h3>Organization</h3><p>Standing context for every draft</p></div></header>
@@ -1921,73 +1955,6 @@ function renderSettings() {
    Retired platforms — a platform removed while old posts still reference
    it — are shown greyed out and cannot be switched on. They exist so the
    history stays readable; see migratePlatforms in js/data.js. */
-/* The whole timing table in one place, plus the bibliography.
-
-   The per-draft hint answers "when"; this answers "on what basis", for
-   every platform at once, without having to open six dialogs. It lists
-   the operator's own platform list rather than the research table, so a
-   platform they added shows up honestly labelled as having no
-   platform-specific research behind its window. */
-function timingCard() {
-  const rows = listPlatforms();
-  const cited = new Map();
-  for (const platform of rows) {
-    for (const source of sourcesFor(platform.key)) cited.set(source.id, source);
-  }
-
-  return `<section class="card" style="margin-top:1rem">
-    <header class="card-head">
-      <div>
-        <h3>${icon("clock")} Best time to post</h3>
-        <p>Research-backed windows, per platform</p>
-      </div>
-    </header>
-    <div class="card-body">
-      <p class="hint" style="margin-bottom:.9rem">${esc(TIMING_DISCLAIMER)}</p>
-
-      <div class="timing-table">
-        ${rows.map((platform) => {
-          const timing = bestTimeFor(platform.key);
-          return `<div class="timing-row">
-            <span class="pip" style="background:${esc(platform.color)}">${esc(platform.label[0])}</span>
-            <span class="timing-row-main">
-              <strong>${esc(platform.label)}</strong>
-              <small>${esc(timing.headline)}${timing.generic ? " — cross-platform average, no research specific to this one" : ""}</small>
-            </span>
-            <span class="badge timing-${esc(timing.confidence)}" title="${esc(timing.confidenceNote)}">${esc(timing.confidenceLabel)}</span>
-            <button class="btn btn-quiet btn-sm" type="button" data-act="timing-detail"
-                    data-platform-key="${esc(platform.key)}">Details</button>
-          </div>`;
-        }).join("")}
-      </div>
-
-      <p class="hint" style="margin-top:.9rem">
-        Two of these platforms have no large study behind them at all. Reddit's window rests on this workspace's own
-        results and on how local communities behave, not on a dataset; Nextdoor's comes from Nextdoor, which publishes
-        no sample size. Both say so when you open their details.
-      </p>
-
-      <details class="timing-sources" style="margin-top:.8rem">
-        <summary>All ${plural(cited.size, "source")} · checked ${esc(fmtDate(`${TIMING_RESEARCH_DATE}T12:00:00`))}</summary>
-        <ul>
-          ${[...cited.values()].map((source) => `<li>
-            <a href="${esc(safeUrl(source.url))}" target="_blank" rel="noopener noreferrer">
-              ${esc(source.org)} — ${esc(source.title)} ${icon("external")}
-            </a>
-            <small>${esc(source.method)}${source.published ? ` Published ${esc(source.published)}.` : ""}</small>
-          </li>`).join("")}
-        </ul>
-      </details>
-
-      <p class="hint" style="margin-top:.8rem">
-        These are averages over other people's audiences. Once this workspace holds a season of publication records,
-        compare them against what actually happened here — inquiries and pickups booked, not reactions — and let that
-        win. That is what the platforms' own tools do; Sprout's reads sixteen weeks of a single audience.
-      </p>
-    </div>
-  </section>`;
-}
-
 function platformRow(platform) {
   const usedBy = platformUsage(platform.key);
   const link = platform.homeUrl;

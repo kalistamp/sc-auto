@@ -284,7 +284,11 @@ reasoning open underneath. **Use this time** moves the field to the next real
 occurrence of that window, and the Schedule dialog starts on it rather than on
 an arbitrary "tomorrow at 10".
 
-Settings holds the whole table at once, with every source behind it.
+The **Overview** carries it at a glance: every platform you have switched on
+shows its window right under its front-door link, with a **Why?** that opens the
+evidence, and the full bibliography under the grid. It sits where the platforms
+already were, so there is no second list of platforms to keep in step with the
+first.
 
 The windows live in [`js/timing.js`](js/timing.js) and nothing fetches them at
 runtime. Two things about them are deliberate:

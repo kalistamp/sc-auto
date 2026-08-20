@@ -235,20 +235,45 @@ test("every place the app shows a window also shows the disclaimer and the sourc
   const app = await read("js/app.js");
 
   /* The full record renders the disclaimer and the citations. */
-  const detail = app.slice(app.indexOf("function timingDetail("), app.indexOf("function timingSources("));
+  const detail = app.slice(app.indexOf("function timingDetail("), app.indexOf("function openTimingDialog("));
   assert.ok(detail.includes("TIMING_DISCLAIMER"), "timingDetail must carry the disclaimer");
-  assert.ok(detail.includes("timingSources("), "timingDetail must carry the citations");
+  assert.ok(detail.includes("timingBibliography("), "timingDetail must carry the citations");
 
   /* The one-line hint is too small for either, so it must offer the way
      through to them instead of standing alone. */
   const hint = app.slice(app.indexOf("function timingHint("), app.indexOf("function timingDetail("));
   assert.ok(hint.includes("timing-detail"), "the hint must link through to the full record");
 
-  /* And the settings card, which is where the bibliography lives. */
-  const card = app.slice(app.indexOf("function timingCard("), app.indexOf("function platformRow("));
-  assert.ok(card.includes("TIMING_DISCLAIMER"), "the settings card must carry the disclaimer");
-  assert.ok(card.includes("TIMING_SOURCES") || card.includes("sourcesFor("),
-    "the settings card must list the sources");
+  /* And the Overview's platform card, which is where the windows are
+     read at a glance and where the bibliography lives. */
+  const overview = app.slice(app.indexOf("function renderOverview("), app.indexOf("function launcherPlatforms("));
+  assert.ok(overview.includes("TIMING_DISCLAIMER"), "the Overview card must carry the disclaimer");
+  assert.ok(overview.includes("timingBibliography("), "the Overview card must list the sources");
+});
+
+test("the Overview shows a window for every platform it offers a front door to", async () => {
+  const app = await read("js/app.js");
+  const launcher = app.slice(app.indexOf("function platformLauncher("), app.indexOf("function timingBibliography("));
+
+  assert.ok(launcher.includes("bestTimeFor("), "each front door must carry its platform's window");
+  assert.ok(launcher.includes("timing-detail"), "and a way through to the evidence behind it");
+
+  /* A button inside an anchor is dropped by the browser, which would
+     make "Why?" permanently unclickable. The link and the timing row
+     have to be siblings. */
+  const anchor = launcher.indexOf("<a class=\"launch\"");
+  const closesAnchor = launcher.indexOf("</a>", anchor);
+  const whenRow = launcher.indexOf("launch-when");
+  assert.ok(anchor > -1, "the front door is still a real link");
+  assert.ok(whenRow > closesAnchor, "the timing row must sit outside the anchor, not inside it");
+});
+
+test("the timing feature is no longer buried in Settings", async () => {
+  const app = await read("js/app.js");
+  const settings = app.slice(app.indexOf("function renderSettings("), app.indexOf("function platformRow("));
+  assert.ok(!settings.includes("timingBibliography("),
+    "the sources moved to the Overview, where the platforms already are");
+  assert.ok(!app.includes("function timingCard("), "the old Settings card should be gone, not orphaned");
 });
 
 test("the schedule dialog offers the researched slot rather than an arbitrary one", async () => {

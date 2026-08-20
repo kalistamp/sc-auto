@@ -977,21 +977,34 @@ button.row:hover .row-title { color: var(--accent); }
    The front doors, one click from the first screen. Copper rather than
    sage because these leave the building, which is the rule the rest of
    this sheet follows for anything that hands off to a platform. */
+/* Wider than it was: each tile now carries a posting window as well as
+   a name, and "Tuesday-Wednesday, 12-8 PM" does not fit in 210px. */
 .launcher {
     display: grid; gap: .5rem;
-    grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(272px, 1fr));
+}
+/* .launch-tile is the frame; .launch is the link inside it. They were
+   the same element until the timing row arrived, and that row carries a
+   button — which cannot live inside an anchor. The link kept the name
+   because that is what the front-door test pins. */
+.launch-tile {
+    display: flex; flex-direction: column;
+    border: 1px solid var(--line);
+    border-radius: var(--r-md);
+    background: var(--surface-2);
+    overflow: hidden;
+    transition: border-color var(--dur) var(--ease), transform var(--dur) var(--ease);
 }
 .launch {
     display: flex; align-items: center; gap: .6rem;
     padding: .6rem .7rem;
-    border: 1px solid var(--line);
-    border-radius: var(--r-md);
-    background: var(--surface-2);
     color: inherit; text-decoration: none;
-    transition: border-color var(--dur) var(--ease), background var(--dur) var(--ease), transform var(--dur) var(--ease);
+    transition: background var(--dur) var(--ease);
 }
-a.launch:hover { border-color: var(--copper); background: var(--copper-wash); transform: translateY(-1px); }
-a.launch:focus-visible { outline: 2px solid var(--copper); outline-offset: 2px; }
+a.launch:hover { background: var(--copper-wash); }
+a.launch:focus-visible { outline: 2px solid var(--copper); outline-offset: -2px; }
+/* Decorative only — a browser without :has simply loses the lift. */
+.launch-tile:has(a.launch:hover) { border-color: var(--copper); transform: translateY(-1px); }
 .launch-main { flex: 1; min-width: 0; }
 .launch strong { display: block; font-size: .87rem; font-weight: 600; }
 .launch small {
@@ -999,8 +1012,27 @@ a.launch:focus-visible { outline: 2px solid var(--copper); outline-offset: 2px; 
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .launch .launch-go { flex: none; color: var(--copper); }
-/* A platform with no link: present, so the gap is visible, but inert. */
-.launch.is-flat { opacity: .6; cursor: default; }
+/* A platform with no link: present, so the gap is visible, but inert.
+   Only the link half is dimmed — its posting window is as true as any
+   other platform's and should read as such. */
+.launch-tile.is-flat .launch { opacity: .6; cursor: default; }
+
+/* When to post, under the front door. */
+.launch-when {
+    display: flex; align-items: center; gap: .35rem; flex-wrap: wrap;
+    padding: .3rem .35rem .3rem .7rem;
+    border-top: 1px solid var(--line);
+    background: var(--surface);
+    font-size: .78rem;
+}
+.launch-when .ico { flex: none; width: 1em; height: 1em; color: var(--info); }
+.launch-when .launch-window { font-weight: 600; }
+.launch-when .spacer { min-width: .25rem; }
+/* Weak evidence reads flatter, so a window resting on four of this
+   workspace's own posts does not look as settled as one resting on two
+   billion engagements. */
+.launch-when.is-soft .ico { color: var(--ink-faint); }
+.launch-when.is-soft .launch-window { font-weight: 500; color: var(--ink-soft); }
 
 /* The four steps of the manual publishing workflow, in Settings. */
 .workflow {
@@ -1376,18 +1408,6 @@ button.receipt { cursor: pointer; }
 .timing-sources a { display: inline-flex; align-items: center; gap: .3em; font-weight: 550; }
 .timing-sources a .ico { width: 1em; height: 1em; }
 .timing-sources small { display: block; margin-top: .15rem; color: var(--ink-faint); font-size: .75rem; }
-
-/* The whole table, in settings. */
-.timing-table { display: grid; gap: .1rem; }
-.timing-row {
-    display: flex; align-items: center; gap: .6rem; flex-wrap: wrap;
-    padding: .55rem 0;
-    border-top: 1px solid var(--line);
-}
-.timing-row:first-child { border-top: 0; }
-.timing-row-main { flex: 1 1 12rem; min-width: 0; }
-.timing-row-main strong { display: block; font-size: .9rem; }
-.timing-row-main small { display: block; margin-top: .1rem; font-size: .78rem; color: var(--ink-faint); line-height: 1.4; }
 
 /* ---- draft history ----
    One block per stored generation, so two versions can be read against
