@@ -3,25 +3,22 @@
 
    Two kinds of state live here, and the split matters:
 
-     · CREDENTIALS (GitHub token, model API keys) stay in this
-       browser's localStorage and are never written to the gist. On a
-       new device you enter them once more. Syncing them would mean
-       putting plaintext secrets in a file protected by a short
-       passkey, which is worse than typing them again.
+     · CREDENTIALS (model API keys) stay in this browser's localStorage
+       and are never written to Supabase. On a new device you enter them
+       once more.
 
      · PREFERENCES (theme, last view, list density) are also local,
        because they are per-device by nature — a phone wants a
        different list view than a desktop.
 
    Everything the workspace actually is — posts, records, settings the
-   organization shares — lives in the gist instead. See sync.js.
+   organization shares — lives in Supabase instead. See sync.js.
    ============================================================ */
 
 const CRED_KEY = "sct.credentials.v1";
 const MODELS_KEY = "sct.models.v1";
 const PREF_KEY = "sct.prefs.v1";
 const LOCAL_DATA_KEY = "sct.workspace.v2";
-const UNLOCK_KEY = "sct.unlocked";
 const DRAFT_KEY = "sct.brief.draft";
 
 export const PROVIDERS = Object.freeze({
@@ -74,10 +71,14 @@ function write(key, value) {
 
 export function readCredentials() {
   const saved = read(CRED_KEY, {});
+  /* Remove obsolete Gist secrets the first time the Supabase build runs. */
+  if (Object.hasOwn(saved, "githubToken") || Object.hasOwn(saved, "gistId")) {
+    delete saved.githubToken;
+    delete saved.gistId;
+    write(CRED_KEY, saved);
+  }
   const provider = PROVIDERS[saved.provider] ? saved.provider : "anthropic";
   return {
-    githubToken: String(saved.githubToken || "").trim(),
-    gistId: extractGistId(saved.gistId),
     provider,
     effort: ["", "low", "medium", "high"].includes(saved.effort) ? saved.effort : "",
     keys: Object.fromEntries(PROVIDER_KEYS.map((id) => [id, String(saved.keys?.[id] || "").trim()])),
@@ -88,7 +89,6 @@ export function readCredentials() {
 
 export function writeCredentials(next) {
   const merged = { ...readCredentials(), ...next };
-  merged.gistId = extractGistId(merged.gistId);
   write(CRED_KEY, merged);
   return readCredentials();
 }
@@ -155,15 +155,6 @@ export function clearModelCatalogs() {
   try { localStorage.removeItem(MODELS_KEY); } catch { /* nothing to do */ }
 }
 
-/* People paste the whole gist URL about as often as the bare id. */
-export function extractGistId(value) {
-  return String(value || "").trim()
-    .replace(/^.*gist\.github\.com\//, "")
-    .replace(/^[^/]+\//, "")
-    .replace(/[#?].*$/, "")
-    .replace(/\/+$/, "");
-}
-
 /* Never show a token, only enough of it to recognise which one it is. */
 export function fingerprint(token) {
   if (!token) return "—";
@@ -180,22 +171,10 @@ export function writePrefs(patch) {
   return merged;
 }
 
-/* ---------- session latch ------------------------------------------ */
-
-/* sessionStorage, not localStorage: closing the tab re-locks the studio,
-   but a reload during a working session does not interrupt you. */
-export const session = {
-  get unlocked() {
-    try { return sessionStorage.getItem(UNLOCK_KEY) === "1"; } catch { return false; }
-  },
-  unlock() { try { sessionStorage.setItem(UNLOCK_KEY, "1"); } catch { /* ignore */ } },
-  lock() { try { sessionStorage.removeItem(UNLOCK_KEY); } catch { /* ignore */ } }
-};
-
 /* ---------- local workspace copy ------------------------------------ */
 
-/* Used when no gist is connected, and as the cache that lets the app
-   open instantly (and survive an offline start) once one is. */
+/* A device-local cache that lets an authenticated user survive a
+   temporary network failure. It is never loaded before authentication. */
 export function readLocalWorkspace() {
   try {
     const raw = localStorage.getItem(LOCAL_DATA_KEY);
@@ -205,10 +184,8 @@ export function readLocalWorkspace() {
 
 /* Returns false when the browser refused the write — almost always the
    ~5 MB per-origin quota, reached by a workspace with enough posts in it.
-   The caller has to know: with a gist connected this only means the
-   instant-open cache went stale, but with no gist connected localStorage
-   IS the store, and a silent failure there loses the edit. Swallowing the
-   exception without reporting it is how that becomes invisible. */
+   The caller has to know when this cache is stale even though Supabase
+   remains the source of truth. */
 export function writeLocalWorkspace(data) {
   try {
     localStorage.setItem(LOCAL_DATA_KEY, JSON.stringify(data));

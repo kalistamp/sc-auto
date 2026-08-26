@@ -1,19 +1,14 @@
 /* ============================================================
    SAFE CYCLE STUDIO — configuration
 
-   No credentials live here. The GitHub token and every model API key
-   are yours, entered once per device under Settings → Cloud sync, and
-   kept in that browser's localStorage only. Nothing in this repository
-   can reach your gist, which is what makes the published site safe.
+   The Supabase URL and publishable key are public browser configuration,
+   not secrets. Model API keys remain device-local and are never written
+   to Supabase. The service-role key must never be added to this file.
    ============================================================ */
 
-/* Unlocks the front page. NOT a security boundary, and deliberately so:
-   this file is served publicly, so anyone who views source can read it.
-   Its only job is to stop a scraper or a casual passer-by from landing
-   in the interface — the workspace itself is protected by the GitHub
-   token you enter, which never leaves your browser, and by the fact
-   that no credential is stored in this repository at all. */
-export const APP_PASSKEY = "p";
+export const SUPABASE_URL = "https://baiojghilzxhkebfblzv.supabase.co";
+export const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_nfLVr5Krdld9pxxr4f2CYQ_bsn0TNxx";
+export const SUPABASE_SCHEMA = "sc";
 
 /* BUILD STAMP — must match, in five places:
      · `--build` in styles.css
@@ -29,13 +24,10 @@ export const APP_PASSKEY = "p";
    The import map is the one that cannot be checked at runtime, and it is
    the one that matters most. Without it a deploy can pair a fresh app.js
    with a cached data.js; the module graph then fails to LINK, so no code
-   runs at all, and the passkey gate renders with a dead button. That has
+   runs at all, and the authentication gate renders with a dead button. That has
    happened. tests/boot.test.mjs is what enforces it now — bump all five
    together and run `npm run check`. */
-export const BUILD = "3.7.0";
-
-/* The single file inside the gist that holds the whole workspace. */
-export const GIST_FILENAME = "sc_data.json";
+export const BUILD = "3.8.0";
 
 /* Quiet period after an edit before a save fires, in ms. */
 export const SAVE_DEBOUNCE_MS = 900;
@@ -44,8 +36,7 @@ export const SAVE_DEBOUNCE_MS = 900;
    typing resets the debounce forever and nothing is ever written. */
 export const MAX_SAVE_WAIT_MS = 6000;
 
-/* Gist revisions listed in the version-history dialog. GitHub returns
-   every save since the beginning; showing all of them is just noise. */
+/* Supabase revisions listed in the version-history dialog. */
 export const HISTORY_LIMIT = 30;
 
 /* Generation runs kept in the workspace. This is the audit trail for

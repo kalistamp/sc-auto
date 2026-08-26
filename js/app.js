@@ -14,7 +14,7 @@
    nothing ever will; that boundary is the point.
    ============================================================ */
 
-import { APP_PASSKEY, BUILD, DELETED_RETENTION_DAYS } from "./config.js";
+import { BUILD, DELETED_RETENTION_DAYS } from "./config.js";
 import {
   STATUS_LABELS,
   addActivity, addRun, allVariants, countsFor, createDefaultData, createExternalPost,
@@ -29,11 +29,11 @@ import { buildCopyText, platformHomeUrl, platformLabel, variantChecks } from "./
 import { ctaCoverage } from "./signature.js";
 import { PROMPT_VERSION, ProviderError, generateDrafts, listModels, modelsMatch, receiptState } from "./providers.js";
 import {
-  PROVIDERS, PROVIDER_KEYS, clearCredentials, clearDraftBrief, fingerprint, readCredentials,
-  readDraftBrief, readModelCatalog, readPrefs, session, writeCredentials, writeDraftBrief,
+  PROVIDERS, PROVIDER_KEYS, clearCredentials, clearDraftBrief, readCredentials,
+  readDraftBrief, readModelCatalog, readPrefs, writeCredentials, writeDraftBrief,
   writeModelCatalog, writePrefs
 } from "./settings.js";
-import { SyncError, Workspace } from "./sync.js";
+import { getCurrentUser, signInWithPassword, signOutUser, SyncError, Workspace } from "./sync.js";
 import { THEMES, applyTheme, currentTheme, setTheme, toggleTheme, watchSystemTheme } from "./theme.js";
 import {
   TIMING_DISCLAIMER, TIMING_RESEARCH_DATE, bestTimeFor, describeSlot, formatWindow,
@@ -103,8 +103,26 @@ function boot() {
     state.brief.topic ||= draft.keyMessage || "";
   }
 
-  if (session.unlocked) enterStudio({ silent: true });
-  else el("#passkey")?.focus();
+  void resumeSession();
+}
+
+async function resumeSession() {
+  const message = el("#gate-msg");
+  message.className = "gate-msg is-busy";
+  message.textContent = "Checking your session…";
+  try {
+    const user = await getCurrentUser();
+    if (!user) {
+      message.textContent = "";
+      el("#auth-email")?.focus();
+      return;
+    }
+    workspace.setUser(user);
+    await enterStudio({ silent: true });
+  } catch (error) {
+    message.className = "gate-msg is-bad";
+    message.textContent = describeError(error);
+  }
 }
 
 /* The one place the workspace is adopted, so the platform registry can
@@ -169,7 +187,7 @@ async function enterStudio({ silent = false } = {}) {
   try {
     const { data, from } = await workspace.load();
     adoptData(data);
-    if (!silent && from === "gist") toast("Workspace loaded from your gist", { kind: "good" });
+    if (!silent && from === "supabase") toast("Workspace loaded from Supabase", { kind: "good" });
   } catch (error) {
     /* A failed remote load must not lock the operator out of their own
        records — fall back to the local copy and say what happened. */
@@ -248,36 +266,43 @@ function wireChrome() {
 
 async function onUnlock(event) {
   event.preventDefault();
-  const input = el("#passkey");
+  const email = el("#auth-email");
+  const password = el("#auth-password");
   const button = el("#gate-btn");
   const message = el("#gate-msg");
 
-  if (input.value !== APP_PASSKEY) {
-    el("#gate-card").classList.add("is-wrong");
-    setTimeout(() => el("#gate-card").classList.remove("is-wrong"), 460);
-    message.className = "gate-msg";
-    message.textContent = "That passkey is not right.";
-    input.select();
+  if (!email.value.trim() || !password.value) {
+    message.className = "gate-msg is-bad";
+    message.textContent = "Enter both your email and password.";
     return;
   }
 
   message.className = "gate-msg is-busy";
-  message.textContent = "Opening your workspace…";
+  message.textContent = "Signing in…";
   button.disabled = true;
-  session.unlock();
-  await enterStudio();
+  try {
+    const user = await signInWithPassword(email.value.trim(), password.value);
+    password.value = "";
+    workspace.setUser(user);
+    await enterStudio();
+  } catch (error) {
+    message.className = "gate-msg is-bad";
+    message.textContent = describeError(error);
+  } finally {
+    button.disabled = false;
+  }
 }
 
 async function lockStudio() {
   if (workspace.dirty) {
     const ok = await confirmAction({
       title: "Lock with unsaved changes?",
-      body: "Some edits have not reached your gist yet. They stay on this device, but locking now means they are not backed up.",
+      body: "Some edits have not reached Supabase yet. They stay on this device, but signing out now means they are not backed up.",
       confirmLabel: "Lock anyway"
     });
     if (!ok) return;
   }
-  session.lock();
+  await signOutUser();
   location.reload();
 }
 
@@ -304,7 +329,7 @@ function hideBanner() { el("#banner").hidden = true; }
 /* ---------- sync pill ---------------------------------------------- */
 
 const SYNC_LOOK = {
-  local:    { cls: "is-local",  icon: "cloud-off", text: "This device" },
+  locked:   { cls: "is-local",  icon: "cloud-off", text: "Signed out" },
   dirty:    { cls: "",          icon: "clock",     text: "Saving soon" },
   saving:   { cls: "is-busy",   icon: "refresh",   text: "Saving" },
   synced:   { cls: "is-synced", icon: "check",     text: "Saved" },
@@ -313,7 +338,7 @@ const SYNC_LOOK = {
 };
 
 function paintSyncState(status) {
-  const look = SYNC_LOOK[status] || SYNC_LOOK.local;
+  const look = SYNC_LOOK[status] || SYNC_LOOK.locked;
   const pill = el("#sync-pill");
   pill.className = `sync-pill ${look.cls}`;
   pill.querySelector("use").setAttribute("href", `#i-${look.icon}`);
@@ -325,7 +350,7 @@ function paintSyncState(status) {
   const stamp = el("#side-stamp");
   if (dot && label && stamp) {
     dot.className = `dot ${status === "synced" ? "is-on" : status === "error" || status === "conflict" ? "is-bad" : workspace.connected ? "is-warn" : ""}`;
-    label.textContent = workspace.connected ? "Gist sync" : "This device";
+    label.textContent = workspace.connected ? "Supabase sync" : "Signed out";
     stamp.textContent = workspace.connected
       ? (workspace.lastSyncedAt ? `synced ${relTime(workspace.lastSyncedAt)}` : "not synced yet")
       : "not connected";
@@ -349,14 +374,14 @@ function warnIfCacheStale() {
   if (cacheWarned || workspace.status === "error") return;
   cacheWarned = true;
   showBanner(
-    "This browser is out of storage, so the offline copy on this device is no longer being updated. Your gist still has everything.",
+    "This browser is out of storage, so the offline copy on this device is no longer being updated. Supabase still has everything.",
     { kind: "warn", action: "Back up", onAction: () => { hideBanner(); exportJson(); } }
   );
 }
 
 function syncTitle(status) {
-  if (status === "local") return "Not syncing. Click to connect a gist.";
-  if (status === "synced") return `Saved to your gist${workspace.lastSyncedAt ? ` ${relTime(workspace.lastSyncedAt)}` : ""}. Click to pull the latest.`;
+  if (status === "locked") return "Sign in to sync this workspace.";
+  if (status === "synced") return `Saved to Supabase${workspace.lastSyncedAt ? ` ${relTime(workspace.lastSyncedAt)}` : ""}. Click to pull the latest.`;
   if (status === "conflict") return "This workspace changed elsewhere. Click to resolve.";
   if (status === "error") return "The last save did not go through. Click to retry.";
   return "Saving…";
@@ -364,7 +389,7 @@ function syncTitle(status) {
 
 async function onSyncPill() {
   const status = workspace.status;
-  if (status === "local") return openSyncDialog();
+  if (status === "locked") return;
   if (status === "conflict") return openConflictDialog();
   if (status === "error" || status === "dirty") { hideBanner(); return workspace.flush(); }
   if (status === "saving") return;
@@ -374,7 +399,7 @@ async function onSyncPill() {
     const { data } = await workspace.load();
     adoptData(data);
     render();
-    toast("Pulled the latest from your gist", { kind: "good" });
+    toast("Pulled the latest from Supabase", { kind: "good" });
   } catch (error) {
     toast(describeError(error), { kind: "error" });
   }
@@ -1186,7 +1211,7 @@ function queueItem({ post, variant }) {
 
 function renderDeleted() {
   const purged = purgeExpiredDeleted(state.data);
-  /* Anything the clock removed has to reach the gist too, but not from
+  /* Anything the clock removed has to reach Supabase too, but not from
      inside a render — a save that fires mid-paint reenters this code. */
   if (purged) queueMicrotask(() => commit());
 
@@ -1878,17 +1903,17 @@ function renderSettings() {
 
       <aside>
         <section class="card">
-          <header class="card-head"><div><h3>Cloud sync</h3><p>${workspace.connected ? "Connected" : "Not connected"}</p></div></header>
+          <header class="card-head"><div><h3>Cloud sync</h3><p>Connected with Supabase</p></div></header>
           <div class="card-body">
             <dl class="facts">
-              <dt>Workspace</dt><dd>${workspace.connected ? `gist ${esc(credentials.gistId.slice(0, 10))}…` : "This device only"}</dd>
-              <dt>GitHub token</dt><dd>${esc(fingerprint(credentials.githubToken))}</dd>
+              <dt>Account</dt><dd>${esc(workspace.accountEmail)}</dd>
+              <dt>Workspace</dt><dd><span class="mono">sc</span> schema</dd>
               <dt>Model</dt><dd>${credentials.keys[credentials.provider] ? esc(credentials.models[credentials.provider]) : "not configured"}</dd>
               <dt>Revision</dt><dd>${state.data.revision}</dd>
             </dl>
             <div class="btn-row" style="margin-top:.9rem">
-              <button class="btn btn-primary btn-sm" type="button" data-act="sync-settings">${icon("gear")} ${workspace.connected ? "Manage" : "Connect"}</button>
-              ${workspace.connected ? `<button class="btn btn-ghost btn-sm" type="button" data-act="history">${icon("history")} Versions</button>` : ""}
+              <button class="btn btn-primary btn-sm" type="button" data-act="sync-settings">${icon("gear")} Model settings</button>
+              <button class="btn btn-ghost btn-sm" type="button" data-act="history">${icon("history")} Versions</button>
             </div>
           </div>
         </section>
@@ -1923,10 +1948,10 @@ function renderSettings() {
           <header class="card-head"><div><h3>Danger</h3><p>Both are hard to undo</p></div></header>
           <div class="card-body">
             <div class="btn-row">
-              <button class="btn btn-ghost btn-sm" type="button" data-act="forget-device">${icon("signout")} Forget credentials</button>
+              <button class="btn btn-ghost btn-sm" type="button" data-act="forget-device">${icon("signout")} Forget model keys</button>
               <button class="btn btn-danger btn-sm" type="button" data-act="reset">${icon("trash")} Reset workspace</button>
             </div>
-            <p class="hint" style="margin-top:.7rem">Forgetting credentials clears the token and API keys from this browser and leaves the gist untouched. Resetting replaces every post and setting — export a backup first.</p>
+            <p class="hint" style="margin-top:.7rem">Forgetting model keys clears provider API keys from this browser and leaves Supabase untouched. Resetting replaces every post and setting — export a backup first.</p>
           </div>
         </section>
 
@@ -2158,31 +2183,13 @@ function openSyncDialog() {
     <form class="modal-inner" id="sync-form">
       <div class="modal-head">
         <div>
-          <h2>Cloud sync</h2>
-          <p>The studio holds nothing of its own. Point it at a gist you own and a model key you pay for, and it becomes yours — on this device and any other you enter these on.</p>
+          <h2>Model settings</h2>
+          <p>Your workspace syncs automatically through Supabase. Provider API keys stay only in this browser.</p>
         </div>
         <button class="icon-btn" type="button" data-close aria-label="Close">${icon("x")}</button>
       </div>
 
       <div class="modal-scroll">
-        <section class="modal-section">
-          <h3>Workspace storage</h3>
-          <div class="field">
-            <label for="s-token">GitHub token</label>
-            <input class="input" id="s-token" name="githubToken" type="password" autocomplete="off" spellcheck="false"
-                   placeholder="github_pat_… or ghp_…" value="${esc(credentials.githubToken)}" data-autofocus>
-            <p class="hint">Needs <strong>Gists → Read and write</strong> and nothing else.
-              <a href="https://github.com/settings/personal-access-tokens" target="_blank" rel="noopener">Create one ↗</a></p>
-          </div>
-          <div class="field">
-            <label for="s-gist">Gist ID</label>
-            <input class="input" id="s-gist" name="gistId" autocomplete="off" spellcheck="false"
-                   placeholder="Paste the gist id or its full URL" value="${esc(credentials.gistId)}">
-            <p class="hint">A secret gist containing one file named <code>sc_data.json</code>. A full URL works — the id is pulled out of it.
-              <a href="https://gist.github.com/" target="_blank" rel="noopener">New gist ↗</a></p>
-          </div>
-        </section>
-
         <section class="modal-section">
           <h3>Drafting model</h3>
           <div class="field">
@@ -2234,7 +2241,7 @@ function openSyncDialog() {
 
         <div class="notice">
           ${icon("shield")}
-          <span><strong>Credentials never leave this browser.</strong> They are not written to the gist and are not part of a backup. On another device you enter them once more — that is deliberate: syncing plaintext keys behind a short passkey would be worse than typing them again.</span>
+          <span><strong>Model API keys never leave this browser.</strong> They are not written to Supabase and are not part of a backup. On another device you enter them once more.</span>
         </div>
       </div>
 
@@ -2242,7 +2249,7 @@ function openSyncDialog() {
         <button class="btn btn-ghost btn-sm" type="button" data-act="forget-device">Forget</button>
         <span class="spacer"></span>
         <button class="btn btn-ghost" type="button" data-close>Cancel</button>
-        <button class="btn btn-primary" type="submit">Save and connect</button>
+        <button class="btn btn-primary" type="submit">Save model settings</button>
       </div>
     </form>`, { size: "" });
 }
@@ -2396,56 +2403,26 @@ async function submitSyncForm(form) {
   const values = new FormData(form);
   const button = form.querySelector("button[type=submit]");
   const next = {
-    githubToken: (values.get("githubToken") || "").trim(),
-    gistId: (values.get("gistId") || "").trim(),
     provider: values.get("provider"),
     effort: values.get("effort") || "",
     keys: Object.fromEntries(PROVIDER_KEYS.map((id) => [id, (values.get(`key_${id}`) || "").trim()])),
     models: Object.fromEntries(PROVIDER_KEYS.map((id) => [id, chosenModel(values, id)]))
   };
 
-  if (Boolean(next.githubToken) !== Boolean(next.gistId)) {
-    return toast("Enter both the token and the gist id, or leave both empty.", { kind: "error" });
-  }
-
   button.disabled = true;
-  button.innerHTML = `<span class="spinner"></span> Connecting…`;
+  button.innerHTML = `<span class="spinner"></span> Saving…`;
 
   try {
-    let remote = null;
-    if (next.githubToken && next.gistId) remote = await workspace.test(next);
-
     writeCredentials(next);
     workspace.refreshCredentials();
-
-    if (remote) {
-      /* First connection with local work already done: offer to keep it
-         rather than silently replacing one with the other. */
-      const localHasWork = state.data.posts.length > 0;
-      const remoteHasWork = remote.posts.length > 0;
-      if (localHasWork && remoteHasWork && state.data.revision === 0) {
-        const keepLocal = await confirmAction({
-          title: "Two workspaces",
-          body: `This device has ${plural(state.data.posts.length, "post")} and the gist has ${plural(remote.posts.length, "post")}. Which should win?`,
-          confirmLabel: "Keep this device's"
-        });
-        if (!keepLocal) adoptData(remote);
-        workspace.baseRevision = Number(remote.revision || 0);
-        if (keepLocal) workspace.touch();
-      } else {
-        adoptData(remote);
-        workspace.baseRevision = Number(remote.revision || 0);
-      }
-      workspace.lastSyncedAt = new Date();
-    }
 
     closeModal();
     render();
     paintSyncState(workspace.status);
-    toast(remote ? "Connected to your gist" : "Saved on this device", { kind: "good" });
+    toast("Model settings saved on this device", { kind: "good" });
   } catch (error) {
     button.disabled = false;
-    button.textContent = "Save and connect";
+    button.textContent = "Save model settings";
     toast(describeError(error), { kind: "error" });
   }
 }
@@ -2459,23 +2436,23 @@ function openConflictDialog() {
       <div class="modal-head">
         <div>
           <h2>This workspace changed elsewhere</h2>
-          <p>Another device saved to the same gist while this one had unsaved edits. Nothing has been overwritten — choose which version to keep.</p>
+          <p>Another device saved to Supabase while this one had unsaved edits. Nothing has been overwritten — choose which version to keep.</p>
         </div>
       </div>
       <div class="modal-scroll">
         <dl class="facts">
-          <dt>On the gist</dt><dd>revision ${remote.revision} · ${plural(remote.posts.length, "post")} · saved ${esc(relTime(remote.updatedAt))}</dd>
+          <dt>On Supabase</dt><dd>revision ${remote.revision} · ${plural(remote.posts.length, "post")} · saved ${esc(relTime(remote.updatedAt))}</dd>
           <dt>On this device</dt><dd>revision ${state.data.revision} · ${plural(state.data.posts.length, "post")}</dd>
         </dl>
         <div class="notice is-warn" style="margin-top:1rem">
           ${icon("alert")}
-          <span>Download a backup first if you are unsure. Whichever you discard is still recoverable from the gist's version history.</span>
+          <span>Download a backup first if you are unsure. Whichever you discard remains recoverable from Supabase version history.</span>
         </div>
       </div>
       <div class="modal-foot">
         <button class="btn btn-ghost btn-sm" type="button" data-act="export-json">${icon("download")} Backup</button>
         <span class="spacer"></span>
-        <button class="btn btn-ghost" type="button" data-act="resolve" data-choice="theirs">Use the gist's</button>
+        <button class="btn btn-ghost" type="button" data-act="resolve" data-choice="theirs">Use Supabase</button>
         <button class="btn btn-primary" type="button" data-act="resolve" data-choice="mine">Keep mine</button>
       </div>
     </div>`, { size: "sm" });
@@ -2488,7 +2465,7 @@ async function openHistoryDialog() {
       <div class="modal-head">
         <div>
           <h2>Version history</h2>
-          <p>GitHub keeps a revision for every save. Restoring writes the old contents back as a new save, so a restore is itself undoable from this list.</p>
+          <p>Supabase keeps a revision for every save. Restoring writes the old contents back as a new save, so a restore is itself undoable from this list.</p>
         </div>
         <button class="icon-btn" type="button" data-close aria-label="Close">${icon("x")}</button>
       </div>
@@ -3580,7 +3557,7 @@ function restorePost(postId, { quiet = false } = {}) {
 }
 
 /* The one place in this app that destroys something. Both routes into
-   it ask first, and both say plainly that the gist's revision history
+   it ask first, and both say plainly that Supabase version history
    is the only thing left afterwards. */
 async function purgePost(postId) {
   const entry = state.data.deleted.find((item) => item.id === postId);
@@ -3588,7 +3565,7 @@ async function purgePost(postId) {
 
   const ok = await confirmAction({
     title: `Remove "${entry.campaign}" for good?`,
-    body: "This does not wait for the 30 days. The post and every platform version go now, and the only copy left is in your gist's revision history.",
+    body: "This does not wait for the 30 days. The post and every platform version go now, and the only copy left is in Supabase version history.",
     confirmLabel: "Remove permanently",
     danger: true
   });
@@ -3607,7 +3584,7 @@ async function emptyBin() {
 
   const ok = await confirmAction({
     title: `Empty the bin?`,
-    body: `${plural(count, "deleted post")} ${count === 1 ? "is" : "are"} still inside their ${DELETED_RETENTION_DAYS}-day window. Emptying removes ${count === 1 ? "it" : "them"} now, and the only copy left is in your gist's revision history.`,
+    body: `${plural(count, "deleted post")} ${count === 1 ? "is" : "are"} still inside their ${DELETED_RETENTION_DAYS}-day window. Emptying removes ${count === 1 ? "it" : "them"} now, and the only copy left is in Supabase version history.`,
     confirmLabel: "Empty it",
     danger: true
   });
@@ -3729,8 +3706,8 @@ async function resetWorkspace() {
 
 async function forgetDevice() {
   const ok = await confirmAction({
-    title: "Forget credentials on this device?",
-    body: "The GitHub token and every model API key are removed from this browser. Your gist and its contents are untouched.",
+    title: "Forget model keys on this device?",
+    body: "Every model-provider API key is removed from this browser. Your Supabase workspace is untouched.",
     confirmLabel: "Forget",
     danger: true
   });
@@ -3740,7 +3717,7 @@ async function forgetDevice() {
   closeModal();
   render();
   paintSyncState(workspace.status);
-  toast("Credentials cleared from this device");
+  toast("Model keys cleared from this device");
 }
 
 async function resolveConflict(choice) {
@@ -3749,9 +3726,9 @@ async function resolveConflict(choice) {
   if (remote) {
     adoptData(remote);
     render();
-    toast("Loaded the gist's version");
+    toast("Loaded the Supabase version");
   } else {
-    toast("Your version was written to the gist", { kind: "good" });
+    toast("Your version was written to Supabase", { kind: "good" });
   }
 }
 

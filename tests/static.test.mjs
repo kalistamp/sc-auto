@@ -112,11 +112,26 @@ test("no credentials are committed anywhere in the app", async () => {
   }
 });
 
-test("the worker placeholders are still placeholders", async () => {
+test("the legacy worker remains inert and contains no deployed credentials", async () => {
   const wrangler = await read("worker/wrangler.toml");
-  const example = await read("worker/.dev.vars.example");
   assert.match(wrangler, /REPLACE_WITH_YOUR_GIST_ID/);
-  assert.match(example, /replace-me/);
+});
+
+test("Supabase authentication fails closed and the browser never receives a service key", async () => {
+  const html = await read("index.html");
+  const config = await read("js/config.js");
+  const app = await read("js/app.js");
+  const sync = await read("js/sync.js");
+
+  assert.match(html, /@supabase\/supabase-js@2/);
+  assert.match(html, /id="auth-email"/);
+  assert.match(html, /id="auth-password"/);
+  assert.match(config, /SUPABASE_SCHEMA = "sc"/);
+  assert.doesNotMatch(config, /SUPABASE_SERVICE_KEY\s*=/i);
+  assert.match(app, /getCurrentUser\(\)/);
+  assert.match(sync, /getUser\(\)/, "a cached token must be validated before local workspace data can open");
+  assert.match(sync, /requireUser\(\)/);
+  assert.doesNotMatch(sync, /api\.github\.com\/gists/);
 });
 
 test("the workspace template matches the schema the app writes", async () => {

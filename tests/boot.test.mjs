@@ -355,17 +355,19 @@ test("deleting is recoverable, and the bin has its own section", async () => {
   assert.match(data.slice(data.indexOf("export function migrateData")), /purgeExpiredDeleted\(data\)/);
 });
 
-test("the passkey gate has the exact anchors app.js wires itself to", async () => {
+test("the Supabase sign-in gate has the exact anchors app.js wires itself to", async () => {
   const html = await read("index.html");
   const app = await read("js/app.js");
 
   /* wireChrome() looks these up by id and would throw on a null, taking
      the rest of the wiring down with it. */
-  for (const id of ["gate", "gate-form", "gate-btn", "gate-msg", "gate-card", "passkey", "app"]) {
+  for (const id of ["gate", "gate-form", "gate-btn", "gate-msg", "gate-card", "auth-email", "auth-password", "app"]) {
     assert.match(html, new RegExp(`id="${id}"`), `index.html is missing #${id}`);
   }
 
   assert.match(app, /el\("#gate-form"\)\.addEventListener\("submit", onUnlock\)/,
     "the gate form must still be wired to onUnlock");
-  assert.match(app, /input\.value !== APP_PASSKEY/, "the passkey comparison must still be in place");
+  assert.match(app, /signInWithPassword\(email\.value\.trim\(\), password\.value\)/,
+    "the gate must authenticate with Supabase instead of a cosmetic passkey");
+  assert.doesNotMatch(app, /APP_PASSKEY/, "a public source-code passkey is not an authentication boundary");
 });

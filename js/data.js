@@ -3,7 +3,7 @@
 
    One JSON document holds everything: the organization's standing
    context, per-platform defaults, every post, every generation run,
-   and an activity trail. It is small enough to live in a single gist
+   and an activity trail. It is small enough to live in one JSONB document
    file and be rewritten on every save.
 
    Schema 2 adds the recordkeeping the workflow actually needs:
@@ -159,7 +159,7 @@ export function defaultPlatforms() {
 }
 
 /* Fields, and what happens when a value is missing or nonsense. Written
-   defensively because a platform can arrive from a hand-edited gist as
+   defensively because a platform can arrive from a hand-edited backup as
    easily as from the Add platform form. */
 export function normalizePlatform(input, fallbackKey = "") {
   const source = input && typeof input === "object" ? input : {};
@@ -373,7 +373,7 @@ export function createDefaultData() {
    MIGRATION
 
    Read defensively. A workspace written by an older build — or hand
-   edited in the gist — should open in a newer build without a separate
+   edited in a backup — should open in a newer build without a separate
    migration step, and without losing anything it does carry.
    ------------------------------------------------------------ */
 
@@ -426,7 +426,7 @@ export function migrateData(input) {
 
    THE HARD RULE: a platform key that any post references must end up in
    the list. Publication history is the most valuable thing in this
-   workspace and the least recoverable — the gist is the only copy — so
+   workspace and the least recoverable — Supabase is the primary copy — so
    removing a platform from the built-ins must never orphan or silently
    reassign a post that used it. Schema 2 handled the same situation by
    rewriting the variant's platform to "facebook", which quietly falsified
@@ -622,7 +622,7 @@ export function validateData(data) {
      platform" is answered by the workspace rather than by this file. What
      is still worth catching is a workspace that contradicts itself: a
      duplicate key, or a post pointing at a platform the list does not
-     contain. Migration cannot produce either; a hand-edited gist can. */
+     contain. Migration cannot produce either; a hand-edited backup can. */
   const known = new Set();
   if (!Array.isArray(data.platforms)) {
     errors.push("Platforms must be an array.");
@@ -802,7 +802,7 @@ export function createExternalPost({ campaign, platform, body, title, publishedA
 
    The window is fixed at DELETED_RETENTION_DAYS. After that the entry
    is gone for good, and gone means gone: this app has no server, so
-   there is no other copy but the gist's own revision history.
+   there is no other copy but Supabase version history.
    ------------------------------------------------------------ */
 
 const DAY_MS = 86400000;
