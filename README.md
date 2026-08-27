@@ -7,15 +7,24 @@ an authenticated Supabase workspace.
 ## Storage and security
 
 - Supabase Auth protects the sign-in screen.
-- Workspace data lives in `sc.workspace_data` as one JSONB document per user.
-- `sc.workspace_history` keeps restorable revisions.
-- Row Level Security restricts both tables to the signed-in user.
-- Browser writes use the version-checked `sc.save_workspace` RPC.
+- Workspace metadata, posts, deleted posts, model runs, and activity live as
+  separate rows in `sc.workspace_items`.
+- `sc.workspace_sync_state` is a small revision signal; Realtime sends that
+  signal and clients fetch only changed rows.
+- `sc.workspace_item_versions` keeps a bounded set of restorable delta
+  revisions. Legacy JSONB data remains intact for rollback and old history.
+- Row Level Security and authenticated RPCs restrict every row to its owner.
+- The browser cache uses row-level IndexedDB records instead of repeatedly
+  serializing the complete workspace into localStorage.
 - Model-provider API keys remain in that browser's localStorage. They are never
   stored in Supabase or included in JSON backups.
 - The Supabase URL and publishable key in `js/config.js` are public browser
   configuration. A service-role key must never be committed or sent to the
   browser.
+
+Before deploying this build, run the two manual SQL Editor files in the local
+`prelaunch_deployment/sc` package in numeric order. Do not use a Supabase config
+push or database push for this project.
 
 ## Local development
 
@@ -49,9 +58,10 @@ The test suite enforces this to prevent mixed cached deployments.
 
 ## Data behavior
 
-Edits are debounced and automatically saved. If another device updates the
-same workspace first, the app presents a conflict choice instead of silently
-overwriting either version. JSON exports remain complete portable backups.
+Edits are debounced and automatically saved as row deltas. Keystrokes in a
+post stage only that post. If another device updates the same workspace first,
+the app presents a conflict choice instead of silently overwriting either
+version. JSON exports remain complete portable backups.
 
 Publishing stays manual: the application prepares copy and records publication
 details but never posts to a social platform.

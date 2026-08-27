@@ -298,7 +298,7 @@ test("tags are parsed the way a person types them", () => {
   assert.deepEqual(splitTags(""), []);
 });
 
-test("trails are capped so one JSON file cannot grow forever", () => {
+test("trails are capped so entity rows and backups cannot grow forever", () => {
   const data = createDefaultData();
   for (let index = 0; index < ACTIVITY_LIMIT + 20; index += 1) addActivity(data, "test", `entry ${index}`);
   assert.equal(data.activity.length, ACTIVITY_LIMIT);

@@ -1,10 +1,10 @@
 /* ============================================================
    SAFE CYCLE STUDIO — workspace data model
 
-   One JSON document holds everything: the organization's standing
-   context, per-platform defaults, every post, every generation run,
-   and an activity trail. It is small enough to live in one JSONB document
-   file and be rewritten on every save.
+   One in-memory workspace presents the organization's standing context,
+   per-platform defaults, posts, generation runs, and activity trail. The
+   sync layer stores those collections as independent rows, so this model
+   stays convenient without forcing complete-document network writes.
 
    Schema 2 adds the recordkeeping the workflow actually needs:
      · three separate texts per variant — what the model wrote

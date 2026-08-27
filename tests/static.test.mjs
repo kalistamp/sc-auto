@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { readFile, readdir } from "node:fs/promises";
 import { BUILD } from "../js/config.js";
 
@@ -123,7 +124,8 @@ test("Supabase authentication fails closed and the browser never receives a serv
   const app = await read("js/app.js");
   const sync = await read("js/sync.js");
 
-  assert.match(html, /@supabase\/supabase-js@2/);
+  assert.match(html, /@supabase\/supabase-js@2\.111\.0\/dist\/umd\/supabase\.min\.js/);
+  assert.match(html, /integrity="sha384-[A-Za-z0-9+/=]+"/);
   assert.match(html, /id="auth-email"/);
   assert.match(html, /id="auth-password"/);
   assert.match(config, /SUPABASE_SCHEMA = "sc"/);
@@ -132,6 +134,43 @@ test("Supabase authentication fails closed and the browser never receives a serv
   assert.match(sync, /getUser\(\)/, "a cached token must be validated before local workspace data can open");
   assert.match(sync, /requireUser\(\)/);
   assert.doesNotMatch(sync, /api\.github\.com\/gists/);
+});
+
+test("the GitHub Pages document enforces its available browser security baseline", async () => {
+  const html = await read("index.html");
+  const policy = html.match(/http-equiv="Content-Security-Policy" content="([^"]+)"/)?.[1] || "";
+  assert.match(html, /name="referrer" content="no-referrer"/);
+  assert.match(policy, /default-src 'self'/);
+  assert.match(policy, /object-src 'none'/);
+  assert.match(policy, /base-uri 'self'/);
+  assert.match(policy, /form-action 'self'/);
+  assert.match(policy, /wss:\/\/baiojghilzxhkebfblzv\.supabase\.co/);
+  assert.doesNotMatch(policy, /default-src \*|connect-src \*/);
+
+  /* Static hosting cannot mint nonces. Hash every inline script instead,
+     including the import map, so adding executable markup requires an
+     intentional policy update. */
+  const inline = [...html.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/g)]
+    .map((match) => match[1]).filter(Boolean);
+  assert.ok(inline.length >= 3);
+  for (const source of inline) {
+    const hash = createHash("sha256").update(source).digest("base64");
+    assert.match(policy, new RegExp(`'sha256-${hash.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}'`));
+  }
+});
+
+test("active sync uses row deltas, IndexedDB, and Realtime rather than polling or full JSON writes", async () => {
+  const sync = await read("js/sync.js");
+  const settings = await read("js/settings.js");
+  assert.match(sync, /apply_workspace_changes/);
+  assert.match(sync, /read_workspace_changes_since/);
+  assert.match(sync, /workspace_sync_state/);
+  assert.match(sync, /indexedDB\.open/);
+  assert.match(sync, /postgres_changes/);
+  assert.doesNotMatch(sync, /setInterval\s*\(/);
+  assert.doesNotMatch(sync, /\.rpc\("save_workspace"/);
+  assert.doesNotMatch(settings, /setItem\(LOCAL_DATA_KEY/,
+    "the legacy full-workspace localStorage key must be read-only migration input");
 });
 
 test("the workspace template matches the schema the app writes", async () => {

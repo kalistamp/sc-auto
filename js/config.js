@@ -27,7 +27,7 @@ export const SUPABASE_SCHEMA = "sc";
    runs at all, and the authentication gate renders with a dead button. That has
    happened. tests/boot.test.mjs is what enforces it now — bump all five
    together and run `npm run check`. */
-export const BUILD = "3.8.0";
+export const BUILD = "3.9.0";
 
 /* Quiet period after an edit before a save fires, in ms. */
 export const SAVE_DEBOUNCE_MS = 900;
@@ -36,12 +36,12 @@ export const SAVE_DEBOUNCE_MS = 900;
    typing resets the debounce forever and nothing is ever written. */
 export const MAX_SAVE_WAIT_MS = 6000;
 
-/* Supabase revisions listed in the version-history dialog. */
+/* Restorable row-delta revisions listed in the version-history dialog. */
 export const HISTORY_LIMIT = 30;
 
 /* Generation runs kept in the workspace. This is the audit trail for
-   "which model wrote which post", so it is worth keeping deep — but not
-   unbounded, since the whole workspace is one JSON file. */
+   "which model wrote which post", so it is worth keeping deep without
+   letting either the row store or browser cache grow without a bound. */
 export const RUN_LOG_LIMIT = 150;
 
 /* Activity entries kept. Shorter than the run log: these are UI
@@ -61,8 +61,8 @@ export const ACTIVITY_LIMIT = 120;
    for good, automatically, wherever the workspace is next opened. */
 export const DELETED_RETENTION_DAYS = 30;
 
-/* A backstop on the size of the bin, because the whole workspace is one
-   JSON file and a deleted post carries its full text and history. Only
+/* A backstop on the size of the bin, because each deleted-post row still
+   carries its full text and history. Only
    ever trims the OLDEST beyond this count; the retention window above is
    what normally empties it. Deliberately far above any plausible
    month of deleting. */
@@ -71,8 +71,8 @@ export const DELETED_LIMIT = 200;
 /* Earlier drafts kept per post, so re-running a generation can be
    compared against — and reverted to — what it replaced.
 
-   Bounded because the whole workspace is one JSON file and a snapshot
-   carries the full text of every platform version. Eight is roughly a
+   Bounded because a post row and each saved row version carry the full
+   text of every platform version. Eight is roughly a
    morning of iterating on one post, which is as far back as anyone has
    ever wanted to reach. Beyond that the older ones fall off the end. */
 export const DRAFT_HISTORY_LIMIT = 8;

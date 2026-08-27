@@ -93,7 +93,10 @@ function boot() {
   wireChrome();
   checkBuild();
 
-  workspace.bind(() => state.data);
+  workspace.bind(() => state.data, (data) => {
+    adoptData(data);
+    render();
+  });
   workspace.onStatus(paintSyncState);
 
   const draft = readDraftBrief();
@@ -191,7 +194,7 @@ async function enterStudio({ silent = false } = {}) {
   } catch (error) {
     /* A failed remote load must not lock the operator out of their own
        records — fall back to the local copy and say what happened. */
-    const cached = migrateData(readCachedOrDefault());
+    const cached = migrateData((await workspace.loadCached()) || createDefaultData());
     adoptData(cached);
     showBanner(describeError(error), { action: "Retry", onAction: () => retryLoad() });
   }
@@ -204,13 +207,6 @@ async function enterStudio({ silent = false } = {}) {
 
   render();
   paintSyncState(workspace.status);
-}
-
-function readCachedOrDefault() {
-  try {
-    const raw = localStorage.getItem("sct.workspace.v2");
-    return raw ? JSON.parse(raw) : createDefaultData();
-  } catch { return createDefaultData(); }
 }
 
 async function retryLoad() {
@@ -3143,7 +3139,7 @@ function onInput(event) {
     if (!post) return;
     post[postField] = target.value;
     post.updatedAt = nowIso();
-    commit({ quiet: true });
+    commit({ quiet: true, post });
     return;
   }
 
@@ -3170,7 +3166,7 @@ function onInput(event) {
       const preview = document.getElementById(`ready-${variantId}`);
       if (preview) preview.innerHTML = readyBody(variant, getPlatform(variant.platform));
     }
-    commit({ quiet: true });
+    commit({ quiet: true, post });
   }
 }
 
@@ -3281,9 +3277,10 @@ function onKeydown(event) {
 /* One funnel for every change: stamp the workspace, tell the store, and
    repaint the counts. `quiet` skips the nav repaint for keystroke-rate
    edits, which do not change any count. */
-function commit({ quiet = false } = {}) {
+function commit({ quiet = false, post = null } = {}) {
   state.data.updatedAt = nowIso();
-  workspace.touch();
+  if (post?.id) workspace.touchItem("post", post);
+  else workspace.touch();
   if (!quiet) paintNav();
 }
 

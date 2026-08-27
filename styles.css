@@ -118,7 +118,7 @@
        Pages CDN is serving a stale stylesheet and the app says so out
        loud instead of failing in some confusing partial way. Bump it
        together with ?v= on the <link>/<script> and data-build. */
-    --build: "3.8.0";
+    --build: "3.9.0";
 
     color-scheme: light;
 }

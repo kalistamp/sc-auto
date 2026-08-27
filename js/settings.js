@@ -111,9 +111,9 @@ export function clearCredentials() {
    describing the old one.
    ------------------------------------------------------------------- */
 
-/* Enough for any provider's full list several times over. A ceiling only
-   because localStorage is a shared ~5 MB budget with the workspace, and
-   losing a post to a cache of model names would be an absurd trade. */
+/* Enough for any provider's full list several times over. Keep a ceiling
+   because localStorage still has a small per-origin budget and a model
+   catalog is disposable cache data. */
 const MODEL_CACHE_LIMIT = 300;
 
 function readCatalogs() {
@@ -171,10 +171,11 @@ export function writePrefs(patch) {
   return merged;
 }
 
-/* ---------- local workspace copy ------------------------------------ */
+/* ---------- legacy local workspace copy ----------------------------- */
 
-/* A device-local cache that lets an authenticated user survive a
-   temporary network failure. It is never loaded before authentication. */
+/* Build 3.9 moves the cache to row-level IndexedDB records. This reader
+   exists only to migrate the previous full-document localStorage cache,
+   and is never consulted before Supabase has authenticated the user. */
 export function readLocalWorkspace() {
   try {
     const raw = localStorage.getItem(LOCAL_DATA_KEY);
@@ -182,17 +183,8 @@ export function readLocalWorkspace() {
   } catch { return null; }
 }
 
-/* Returns false when the browser refused the write — almost always the
-   ~5 MB per-origin quota, reached by a workspace with enough posts in it.
-   The caller has to know when this cache is stale even though Supabase
-   remains the source of truth. */
-export function writeLocalWorkspace(data) {
-  try {
-    localStorage.setItem(LOCAL_DATA_KEY, JSON.stringify(data));
-    return true;
-  } catch {
-    return false;
-  }
+export function clearLegacyLocalWorkspace() {
+  try { localStorage.removeItem(LOCAL_DATA_KEY); } catch { /* ignore */ }
 }
 
 /* ---------- in-progress brief --------------------------------------- */
