@@ -27,7 +27,7 @@ export const SUPABASE_SCHEMA = "sc";
    runs at all, and the authentication gate renders with a dead button. That has
    happened. tests/boot.test.mjs is what enforces it now — bump all five
    together and run `npm run check`. */
-export const BUILD = "3.10.0";
+export const BUILD = "3.11.0";
 
 /* Quiet period after an edit before a save fires, in ms. */
 export const SAVE_DEBOUNCE_MS = 900;

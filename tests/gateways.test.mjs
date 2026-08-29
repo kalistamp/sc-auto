@@ -2,10 +2,21 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { ProviderError, generateDrafts, listModels } from "../js/providers.js";
 
-/* The nine providers added on top of Anthropic/OpenAI/Gemini. Eight speak
-   OpenAI's /chat/completions; Cohere has its own /v2/chat. This mirrors the
+/* Six providers added on top of Anthropic/OpenAI/Gemini. Five speak OpenAI's
+   /chat/completions; Cohere has its own /v2/chat. This mirrors the
    recording-fetch harness in providers.test.mjs — every test asserts on the
-   request that was built as well as the reply that came back. */
+   request that was built as well as the reply that came back.
+
+   NVIDIA NIM, Cloudflare Workers AI, and GitHub Models were removed 2026-08.
+   NVIDIA and Cloudflare send no CORS headers, so a browser can never reach
+   them from this static site without a proxy that does not exist today.
+   GitHub Models was retired 2026-07-30 and answers 410 for every request,
+   permanently. All three were briefly offered in the provider dropdown with
+   no visible difference from a working option — the first sign anything was
+   wrong was a note that only appeared after selecting the provider — so they
+   were pulled rather than left to mislead. Cloudflare's per-account
+   credential handling remains in js/providers.js as generic, correct, unused
+   machinery: re-adding it later is a GATEWAYS entry, not a rewrite. */
 
 function mockFetch(responder) {
   const calls = [];
@@ -32,18 +43,14 @@ const goodPackage = {
   ]
 };
 
-/* Every provider keyed, with the compound Cloudflare credential included. */
 const KEYS = {
   anthropic: "sk-ant-x", openai: "sk-x", gemini: "AIza-x",
   groq: "gsk_test", cerebras: "csk-test", openrouter: "sk-or-test",
-  mistral: "mist-test", nvidia: "nvapi-test", cloudflare: "acct123:cftoken",
-  cohere: "co-test", github: "github_pat_test", huggingface: "hf_test"
+  mistral: "mist-test", cohere: "co-test", huggingface: "hf_test"
 };
 const MODELS = {
   groq: "llama-3.3-70b-versatile", cerebras: "llama-3.3-70b", openrouter: "openai/gpt-4.1-mini",
-  mistral: "mistral-large-latest", nvidia: "meta/llama-3.3-70b-instruct",
-  cloudflare: "@cf/meta/llama-3.3-70b-instruct-fp8-fast", cohere: "command-a-03-2025",
-  github: "openai/gpt-4.1-mini", huggingface: "openai/gpt-oss-120b"
+  mistral: "mistral-large-latest", cohere: "command-a-03-2025", huggingface: "openai/gpt-oss-120b"
 };
 const credsFor = (provider, patch = {}) => ({
   provider, effort: "",
@@ -65,9 +72,7 @@ const OPENAI_COMPAT = {
   cerebras:    { host: "api.cerebras.ai/v1/chat/completions", token: "csk-test" },
   openrouter:  { host: "openrouter.ai/api/v1/chat/completions", token: "sk-or-test" },
   mistral:     { host: "api.mistral.ai/v1/chat/completions", token: "mist-test" },
-  nvidia:      { host: "integrate.api.nvidia.com/v1/chat/completions", token: "nvapi-test" },
-  huggingface: { host: "router.huggingface.co/v1/chat/completions", token: "hf_test" },
-  cloudflare:  { host: "api.cloudflare.com/client/v4/accounts/acct123/ai/v1/chat/completions", token: "cftoken" }
+  huggingface: { host: "router.huggingface.co/v1/chat/completions", token: "hf_test" }
 };
 
 for (const [provider, { host, token }] of Object.entries(OPENAI_COMPAT)) {
@@ -117,45 +122,35 @@ test("cohere: uses /v2/chat and reads block content and usage.tokens", async () 
   assert.equal(generation.canonical, "Shared message");
 });
 
-test("cloudflare: the account id builds the URL and the token is the bearer", async () => {
-  const calls = mockFetch(() => chatReply());
-  await generateDrafts({ credentials: credsFor("cloudflare"), brief, organization });
-  assert.equal(calls[0].url, "https://api.cloudflare.com/client/v4/accounts/acct123/ai/v1/chat/completions");
-  assert.equal(calls[0].options.headers.Authorization, "Bearer cftoken");
-});
+/* Regression guard for the reason these three were pulled: the dropdown
+   used to offer them with no visible sign anything was wrong, and only a
+   note shown after selecting the provider explained the CORS block or the
+   2026-07-30 retirement. The fix is that they are not registered at all —
+   verified here from both ends, the settings registry the dropdown renders
+   from and the runtime paths a stray reference would hit. */
+test("nvidia, cloudflare, and github are not registered providers", async () => {
+  const { PROVIDERS, PROVIDER_KEYS } = await import("../js/settings.js");
+  for (const id of ["nvidia", "cloudflare", "github"]) {
+    assert.ok(!PROVIDER_KEYS.includes(id), `${id} must not appear in the dropdown`);
+    assert.equal(PROVIDERS[id], undefined, `${id} must not be a registered provider`);
+  }
 
-test("cloudflare: a key without the account:token shape never reaches the network", async () => {
-  let called = false;
-  globalThis.fetch = async () => { called = true; return new Response("{}"); };
-  await assert.rejects(
-    () => generateDrafts({ credentials: credsFor("cloudflare", { keys: { cloudflare: "no-colon" } }), brief, organization }),
-    (e) => e instanceof ProviderError && /account-id:API-token/.test(e.message)
-  );
-  assert.equal(called, false);
-  await assert.rejects(
-    () => listModels({ provider: "cloudflare", apiKey: "no-colon" }),
-    (e) => /account-id:API-token/.test(e.message)
-  );
-});
-
-test("github: retired, so generation and listing fail clearly without a request", async () => {
-  let called = false;
-  globalThis.fetch = async () => { called = true; return new Response("{}"); };
-  await assert.rejects(
-    () => generateDrafts({ credentials: credsFor("github"), brief, organization }),
-    (e) => e instanceof ProviderError && /retired/i.test(e.message)
-  );
-  await assert.rejects(
-    () => listModels({ provider: "github", apiKey: "github_pat_test" }),
-    (e) => e instanceof ProviderError && /retired/i.test(e.message)
-  );
-  assert.equal(called, false, "a retired provider must not spend a round trip");
+  for (const provider of ["nvidia", "cloudflare", "github"]) {
+    await assert.rejects(
+      () => generateDrafts({ credentials: credsFor("anthropic", { provider }), brief, organization }),
+      (e) => e instanceof ProviderError && /Unknown provider/.test(e.message)
+    );
+    await assert.rejects(
+      () => listModels({ provider, apiKey: "any-key" }),
+      (e) => e instanceof ProviderError && /Unknown provider/.test(e.message)
+    );
+  }
 });
 
 test("a CORS block or offline machine is reported as unreachable, not as bad data", async () => {
   globalThis.fetch = async () => { throw new TypeError("Failed to fetch"); };
   await assert.rejects(
-    () => generateDrafts({ credentials: credsFor("nvidia"), brief, organization }),
+    () => generateDrafts({ credentials: credsFor("groq"), brief, organization }),
     (e) => e instanceof ProviderError && /Could not reach/i.test(e.message)
   );
 });
@@ -216,16 +211,6 @@ test("mistral discovery: drops models the vendor flags as non-chat", async () =>
   ] } }));
   const { models } = await listModels({ provider: "mistral", apiKey: "mist-test" });
   assert.deepEqual(models.map((m) => m.id), ["mistral-large-latest"]);
-});
-
-test("cloudflare discovery: per-account search endpoint, result[].name", async () => {
-  const calls = mockFetch(() => ({ payload: { success: true, result: [
-    { name: "@cf/meta/llama-3.3-70b-instruct-fp8-fast" }, { name: "@cf/meta/llama-3.1-8b-instruct" }
-  ] } }));
-  const { models } = await listModels({ provider: "cloudflare", apiKey: "acct123:cftoken" });
-  assert.match(calls[0].url, /\/accounts\/acct123\/ai\/models\/search\?/);
-  assert.equal(calls[0].options.headers.Authorization, "Bearer cftoken");
-  assert.deepEqual(models.map((m) => m.id), ["@cf/meta/llama-3.3-70b-instruct-fp8-fast", "@cf/meta/llama-3.1-8b-instruct"]);
 });
 
 test("cohere discovery: /v1/models filtered to chat, models[].name", async () => {

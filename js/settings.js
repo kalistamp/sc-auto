@@ -85,36 +85,12 @@ export const PROVIDERS = Object.freeze({
     keysUrl: "https://console.mistral.ai/api-keys",
     supportsEffort: false
   },
-  nvidia: {
-    label: "NVIDIA NIM",
-    defaultModel: "meta/llama-3.3-70b-instruct",
-    placeholder: "nvapi-…",
-    keysUrl: "https://build.nvidia.com",
-    supportsEffort: false,
-    note: "NVIDIA's API sends no CORS headers, so a browser blocks the call. The provider is wired up and works behind a proxy, but not directly from this page."
-  },
-  cloudflare: {
-    label: "Cloudflare Workers AI",
-    defaultModel: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
-    placeholder: "account-id:API-token",
-    keysUrl: "https://dash.cloudflare.com/profile/api-tokens",
-    supportsEffort: false,
-    note: "Workers AI is per-account: enter the key as account-id:API-token. It also sends no CORS headers, so the browser blocks the call — wired up and proxy-ready, but not direct."
-  },
   cohere: {
     label: "Cohere",
     defaultModel: "command-a-03-2025",
     placeholder: "…",
     keysUrl: "https://dashboard.cohere.com/api-keys",
     supportsEffort: false
-  },
-  github: {
-    label: "GitHub Models",
-    defaultModel: "openai/gpt-4.1-mini",
-    placeholder: "github_pat_…",
-    keysUrl: "https://github.com/settings/personal-access-tokens",
-    supportsEffort: false,
-    note: "GitHub retired Models on 2026-07-30; the API now answers HTTP 410 for every key, so this provider cannot currently reach a model."
   },
   huggingface: {
     label: "Hugging Face",

@@ -277,15 +277,20 @@ const GATEWAYS = {
   cerebras:    { base: "https://api.cerebras.ai/v1" },
   openrouter:  { base: "https://openrouter.ai/api/v1" },
   mistral:     { base: "https://api.mistral.ai/v1", listUsesCapabilities: true },
-  nvidia:      { base: "https://integrate.api.nvidia.com/v1" },
-  huggingface: { base: "https://router.huggingface.co/v1" },
-  /* Per-account, so the account id travels with the key as "account-id:token"
-     and is split out into the URL. */
-  cloudflare:  { base: "https://api.cloudflare.com/client/v4/accounts", perAccount: true },
-  /* Retired 2026-07-30; every request now answers 410. Kept wired so it fails
-     with a clear message rather than vanishing from the picker. */
-  github:      { base: "https://models.github.ai/inference", retired: true }
+  huggingface: { base: "https://router.huggingface.co/v1" }
 };
+
+/* Cloudflare Workers AI and NVIDIA NIM were removed 2026-08 — both answer no
+   CORS headers, so a browser could never reach them from this static site
+   without a proxy in front, and there is no such proxy today. GitHub Models
+   was removed the same day for a different reason: it was retired 2026-07-30
+   and every request now answers 410, permanently.
+
+   The `perAccount` mechanism below (Cloudflare's "account-id:API-token"
+   credential split) is left in place rather than deleted with the entry: it
+   is generic gateway machinery, unreachable only because no GATEWAYS entry
+   sets the flag, and correct as-is whenever Cloudflare is added back — no
+   rewrite, just a GATEWAYS entry and a PROVIDERS entry in settings.js. */
 
 /* Cloudflare stores its credential as "account-id:API-token". Tokens carry no
    colon and account ids are hex, so splitting on the first colon is safe. */
@@ -308,11 +313,6 @@ function schemaInstruction(schema) {
 async function callOpenAICompatible({ provider, apiKey, model, instructions, input, schema, signal }) {
   const gateway = GATEWAYS[provider];
   if (!gateway) throw new ProviderError(`Unknown provider: ${provider}.`);
-  if (gateway.retired) {
-    throw new ProviderError("GitHub Models was retired on 2026-07-30 and no longer answers requests.", {
-      hint: "Pick another provider in Cloud sync. The entry is kept only so old receipts still name it."
-    });
-  }
 
   let url = `${gateway.base}/chat/completions`;
   const headers = { Authorization: `Bearer ${apiKey}` };
@@ -531,18 +531,14 @@ async function geminiModels(apiKey, signal) {
 }
 
 /* The OpenAI-compatible gateways all publish { data: [{ id, created }] } at
-   {base}/models — except Cloudflare, whose list is per-account and lives at a
-   different path, and GitHub, which is retired. The same not-text deny-list the
-   OpenAI listing uses applies here: it keys on non-chat endpoints (embedding,
-   audio, image), not on family names, so a "-instruct" chat model is kept. */
+   {base}/models — except a `perAccount` gateway, whose list is per-account
+   and lives at a different path (see cloudflareAccount() above). The same
+   not-text deny-list the OpenAI listing uses applies here: it keys on
+   non-chat endpoints (embedding, audio, image), not on family names, so a
+   "-instruct" chat model is kept. */
 async function gatewayModels(provider, apiKey, signal) {
   const gateway = GATEWAYS[provider];
   if (!gateway) throw new ProviderError(`Unknown provider: ${provider}.`);
-  if (gateway.retired) {
-    throw new ProviderError("GitHub Models was retired on 2026-07-30, so there is no model list to load.", {
-      hint: "Pick another provider. This entry is kept only so older receipts still name it."
-    });
-  }
 
   let url = `${gateway.base}/models`;
   const headers = { Authorization: `Bearer ${apiKey}` };
