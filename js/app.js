@@ -2204,6 +2204,7 @@ function openSyncDialog() {
                        data-key-for="${id}"
                        placeholder="${esc(PROVIDERS[id].placeholder)}" value="${esc(credentials.keys[id])}">
                 <p class="hint"><a href="${esc(PROVIDERS[id].keysUrl)}" target="_blank" rel="noopener">Get a key ↗</a></p>
+                ${PROVIDERS[id].note ? `<p class="hint">${esc(PROVIDERS[id].note)}</p>` : ""}
               </div>
               <div class="field">
                 <label for="m-${id}">Model</label>

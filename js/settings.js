@@ -44,6 +44,84 @@ export const PROVIDERS = Object.freeze({
     placeholder: "AIza…",
     keysUrl: "https://aistudio.google.com/apikey",
     supportsEffort: false
+  },
+
+  /* ---- OpenAI-compatible gateways --------------------------------------
+
+     Everything below speaks OpenAI's /chat/completions shape, so providers.js
+     serves them all through one adapter. The three above each keep their own
+     because each enforces structured output its own way; these ask for JSON
+     with `response_format` and are handed the schema in the prompt as well.
+
+     `note`, where present, is shown under the key field. It is only set for a
+     provider that cannot simply be used with a pasted key — a browser CORS
+     block, a compound credential, or a retired service — so the operator is
+     told before they spend time on a key that cannot work here. */
+  groq: {
+    label: "Groq",
+    defaultModel: "llama-3.3-70b-versatile",
+    placeholder: "gsk_…",
+    keysUrl: "https://console.groq.com/keys",
+    supportsEffort: false
+  },
+  cerebras: {
+    label: "Cerebras",
+    defaultModel: "llama-3.3-70b",
+    placeholder: "csk-…",
+    keysUrl: "https://cloud.cerebras.ai/platform/apikeys",
+    supportsEffort: false
+  },
+  openrouter: {
+    label: "OpenRouter",
+    defaultModel: "openai/gpt-4.1-mini",
+    placeholder: "sk-or-…",
+    keysUrl: "https://openrouter.ai/keys",
+    supportsEffort: false
+  },
+  mistral: {
+    label: "Mistral AI",
+    defaultModel: "mistral-large-latest",
+    placeholder: "…",
+    keysUrl: "https://console.mistral.ai/api-keys",
+    supportsEffort: false
+  },
+  nvidia: {
+    label: "NVIDIA NIM",
+    defaultModel: "meta/llama-3.3-70b-instruct",
+    placeholder: "nvapi-…",
+    keysUrl: "https://build.nvidia.com",
+    supportsEffort: false,
+    note: "NVIDIA's API sends no CORS headers, so a browser blocks the call. The provider is wired up and works behind a proxy, but not directly from this page."
+  },
+  cloudflare: {
+    label: "Cloudflare Workers AI",
+    defaultModel: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+    placeholder: "account-id:API-token",
+    keysUrl: "https://dash.cloudflare.com/profile/api-tokens",
+    supportsEffort: false,
+    note: "Workers AI is per-account: enter the key as account-id:API-token. It also sends no CORS headers, so the browser blocks the call — wired up and proxy-ready, but not direct."
+  },
+  cohere: {
+    label: "Cohere",
+    defaultModel: "command-a-03-2025",
+    placeholder: "…",
+    keysUrl: "https://dashboard.cohere.com/api-keys",
+    supportsEffort: false
+  },
+  github: {
+    label: "GitHub Models",
+    defaultModel: "openai/gpt-4.1-mini",
+    placeholder: "github_pat_…",
+    keysUrl: "https://github.com/settings/personal-access-tokens",
+    supportsEffort: false,
+    note: "GitHub retired Models on 2026-07-30; the API now answers HTTP 410 for every key, so this provider cannot currently reach a model."
+  },
+  huggingface: {
+    label: "Hugging Face",
+    defaultModel: "openai/gpt-oss-120b",
+    placeholder: "hf_…",
+    keysUrl: "https://huggingface.co/settings/tokens",
+    supportsEffort: false
   }
 });
 

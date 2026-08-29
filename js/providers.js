@@ -113,7 +113,9 @@ export async function generateDrafts({ credentials, brief, organization, recentP
   let raw;
   if (provider === "anthropic") raw = await callAnthropic({ apiKey, model: requestedModel, instructions, input, schema, effort: credentials.effort, signal });
   else if (provider === "openai") raw = await callOpenAI({ apiKey, model: requestedModel, instructions, input, schema, signal });
-  else raw = await callGemini({ apiKey, model: requestedModel, instructions, input, schema, signal });
+  else if (provider === "gemini") raw = await callGemini({ apiKey, model: requestedModel, instructions, input, schema, signal });
+  else if (provider === "cohere") raw = await callCohere({ apiKey, model: requestedModel, instructions, input, schema, signal });
+  else raw = await callOpenAICompatible({ provider, apiKey, model: requestedModel, instructions, input, schema, signal });
 
   return {
     generation: cleanGeneration(raw.generation, brief.platforms, organization),
@@ -253,6 +255,145 @@ async function callGemini({ apiKey, model, instructions, input, schema, signal }
 }
 
 /* ------------------------------------------------------------
+   OPENAI-COMPATIBLE GATEWAYS
+
+   Nine of the twelve providers speak OpenAI's /chat/completions verbatim, so
+   one adapter serves them all and each entry below is only what differs: the
+   base URL and how that vendor lists its models. They are kept apart from the
+   `openai` adapter above on purpose — that one talks to /v1/responses and
+   enforces the schema natively, which none of these do.
+
+   Structured output here is `response_format: { type: "json_object" }` rather
+   than a strict json_schema. json_object is the one mode every gateway in this
+   set accepts (a strict schema is supported only by some of them, and by only
+   some models behind the pass-through providers), so it is the choice that
+   works everywhere. It guarantees valid JSON but not the right SHAPE, so the
+   shape is supplied to the model in the prompt — see schemaInstruction — and
+   the existing parse/clean layer rejects anything that still comes back wrong.
+   ------------------------------------------------------------ */
+
+const GATEWAYS = {
+  groq:        { base: "https://api.groq.com/openai/v1" },
+  cerebras:    { base: "https://api.cerebras.ai/v1" },
+  openrouter:  { base: "https://openrouter.ai/api/v1" },
+  mistral:     { base: "https://api.mistral.ai/v1", listUsesCapabilities: true },
+  nvidia:      { base: "https://integrate.api.nvidia.com/v1" },
+  huggingface: { base: "https://router.huggingface.co/v1" },
+  /* Per-account, so the account id travels with the key as "account-id:token"
+     and is split out into the URL. */
+  cloudflare:  { base: "https://api.cloudflare.com/client/v4/accounts", perAccount: true },
+  /* Retired 2026-07-30; every request now answers 410. Kept wired so it fails
+     with a clear message rather than vanishing from the picker. */
+  github:      { base: "https://models.github.ai/inference", retired: true }
+};
+
+/* Cloudflare stores its credential as "account-id:API-token". Tokens carry no
+   colon and account ids are hex, so splitting on the first colon is safe. */
+function cloudflareAccount(apiKey) {
+  const raw = String(apiKey || "");
+  const at = raw.indexOf(":");
+  if (at < 1) return null;
+  const id = raw.slice(0, at).trim();
+  const token = raw.slice(at + 1).trim();
+  return id && token ? { id, token } : null;
+}
+
+/* The shape, handed to the model in words because json_object mode enforces
+   "valid JSON" but not "this schema". The word JSON has to appear for
+   json_object mode to engage, which it does here. */
+function schemaInstruction(schema) {
+  return `Return ONE JSON object and nothing else — no prose, no markdown fence. It must match this JSON Schema exactly; every listed property is required:\n${JSON.stringify(schema)}`;
+}
+
+async function callOpenAICompatible({ provider, apiKey, model, instructions, input, schema, signal }) {
+  const gateway = GATEWAYS[provider];
+  if (!gateway) throw new ProviderError(`Unknown provider: ${provider}.`);
+  if (gateway.retired) {
+    throw new ProviderError("GitHub Models was retired on 2026-07-30 and no longer answers requests.", {
+      hint: "Pick another provider in Cloud sync. The entry is kept only so old receipts still name it."
+    });
+  }
+
+  let url = `${gateway.base}/chat/completions`;
+  const headers = { Authorization: `Bearer ${apiKey}` };
+  if (gateway.perAccount) {
+    const account = cloudflareAccount(apiKey);
+    if (!account) {
+      throw new ProviderError("Cloudflare Workers AI needs its key entered as account-id:API-token.", {
+        hint: "The account id is in your Cloudflare dashboard URL; the API token is created under My Profile → API Tokens."
+      });
+    }
+    url = `${gateway.base}/${encodeURIComponent(account.id)}/ai/v1/chat/completions`;
+    headers.Authorization = `Bearer ${account.token}`;
+  }
+
+  const payload = await request(url, {
+    headers,
+    body: {
+      model,
+      messages: [
+        { role: "system", content: `${instructions}\n\n${schemaInstruction(schema)}` },
+        { role: "user", content: input }
+      ],
+      /* No temperature and no max_tokens: several models behind these gateways
+         reject a non-default temperature, and a request a gateway refuses reads
+         to the operator as a dead model. Let each model apply its own. */
+      response_format: { type: "json_object" }
+    },
+    signal
+  });
+
+  const message = payload.choices?.[0]?.message;
+  const text = typeof message?.content === "string"
+    ? message.content
+    : Array.isArray(message?.content)
+      ? message.content.map((part) => (part && (part.text || part.output_text)) || "").join("")
+      : "";
+
+  return {
+    generation: parseGeneration(text),
+    servedModel: payload.model || "",
+    responseId: payload.id || "",
+    usage: normalizeUsage(payload.usage?.prompt_tokens, payload.usage?.completion_tokens)
+  };
+}
+
+/* Cohere borrows OpenAI's request shape but not its reply: /v2/chat returns a
+   single `message` whose text arrives as content blocks, and its token counts
+   sit one level deeper under usage.tokens. */
+async function callCohere({ apiKey, model, instructions, input, schema, signal }) {
+  const payload = await request("https://api.cohere.com/v2/chat", {
+    headers: { Authorization: `Bearer ${apiKey}` },
+    body: {
+      model,
+      messages: [
+        { role: "system", content: `${instructions}\n\n${schemaInstruction(schema)}` },
+        { role: "user", content: input }
+      ],
+      response_format: { type: "json_object" }
+    },
+    signal
+  });
+
+  const content = payload.message?.content;
+  const text = typeof content === "string"
+    ? content
+    : Array.isArray(content)
+      ? content.filter((block) => block && block.type === "text").map((block) => block.text || "").join("")
+      : "";
+
+  const tokens = payload.usage?.tokens || {};
+  return {
+    generation: parseGeneration(text),
+    /* Cohere does not echo the served model, so this stays empty and the
+       receipt honestly reports "unverified" rather than inventing a match. */
+    servedModel: payload.model || "",
+    responseId: payload.id || "",
+    usage: normalizeUsage(tokens.input_tokens, tokens.output_tokens)
+  };
+}
+
+/* ------------------------------------------------------------
    MODEL DISCOVERY
 
    Every provider publishes what a key may use, and that answer is the
@@ -285,7 +426,9 @@ export async function listModels({ provider, apiKey, signal }) {
   let models;
   if (provider === "anthropic") models = await anthropicModels(key, signal);
   else if (provider === "openai") models = await openaiModels(key, signal);
-  else models = await geminiModels(key, signal);
+  else if (provider === "gemini") models = await geminiModels(key, signal);
+  else if (provider === "cohere") models = await cohereModels(key, signal);
+  else models = await gatewayModels(provider, key, signal);
 
   models = dedupeModels(models);
   if (!models.length) {
@@ -387,6 +530,85 @@ async function geminiModels(apiKey, signal) {
   return out;
 }
 
+/* The OpenAI-compatible gateways all publish { data: [{ id, created }] } at
+   {base}/models — except Cloudflare, whose list is per-account and lives at a
+   different path, and GitHub, which is retired. The same not-text deny-list the
+   OpenAI listing uses applies here: it keys on non-chat endpoints (embedding,
+   audio, image), not on family names, so a "-instruct" chat model is kept. */
+async function gatewayModels(provider, apiKey, signal) {
+  const gateway = GATEWAYS[provider];
+  if (!gateway) throw new ProviderError(`Unknown provider: ${provider}.`);
+  if (gateway.retired) {
+    throw new ProviderError("GitHub Models was retired on 2026-07-30, so there is no model list to load.", {
+      hint: "Pick another provider. This entry is kept only so older receipts still name it."
+    });
+  }
+
+  let url = `${gateway.base}/models`;
+  const headers = { Authorization: `Bearer ${apiKey}` };
+  if (gateway.perAccount) {
+    const account = cloudflareAccount(apiKey);
+    if (!account) {
+      throw new ProviderError("Cloudflare Workers AI needs its key entered as account-id:API-token.", {
+        hint: "The account id is in your Cloudflare dashboard URL; the API token is created under My Profile → API Tokens."
+      });
+    }
+    url = `${gateway.base}/${encodeURIComponent(account.id)}/ai/models/search`
+      + "?per_page=100&task=Text%20Generation&hide_experimental=true";
+    headers.Authorization = `Bearer ${account.token}`;
+  }
+
+  const payload = await request(url, { method: "GET", headers, describe: describeListStatus, signal });
+
+  /* Cloudflare answers with its own envelope ({ result: [{ name }] }); the rest
+     use OpenAI's ({ data: [{ id, created }] }). */
+  if (gateway.perAccount) {
+    return (payload.result || [])
+      .filter((entry) => entry?.name)
+      .map((entry) => ({ id: String(entry.name), label: String(entry.name) }));
+  }
+
+  let rows = (payload.data || []).filter((entry) => entry?.id);
+  /* Mistral publishes per-model capability flags, so its embedding, OCR and
+     moderation models are dropped on the vendor's own say-so. */
+  if (gateway.listUsesCapabilities) {
+    rows = rows.filter((entry) => !entry.capabilities || entry.capabilities.completion_chat !== false);
+  }
+  rows.sort((a, b) => Number(b.created || 0) - Number(a.created || 0));
+  const usable = rows.filter((entry) => !OPENAI_NOT_TEXT.test(entry.id));
+  return (usable.length ? usable : rows).map((entry) => ({ id: String(entry.id), label: String(entry.id) }));
+}
+
+/* Cohere lists at /v1/models; endpoint=chat is the vendor's own filter, so
+   embedding and rerank models never reach the picker. Names carry no timestamp,
+   so the order Cohere returns is kept. */
+async function cohereModels(apiKey, signal) {
+  const out = [];
+  let pageToken = "";
+
+  for (let page = 0; page < LIST_PAGE_CAP; page += 1) {
+    const url = new URL("https://api.cohere.com/v1/models");
+    url.searchParams.set("page_size", "1000");
+    url.searchParams.set("endpoint", "chat");
+    if (pageToken) url.searchParams.set("page_token", pageToken);
+
+    const payload = await request(url.toString(), {
+      method: "GET",
+      headers: { Authorization: `Bearer ${apiKey}` },
+      describe: describeListStatus,
+      signal
+    });
+
+    for (const entry of payload.models || []) {
+      if (!entry?.name) continue;
+      out.push({ id: String(entry.name), label: String(entry.name) });
+    }
+    pageToken = payload.next_page_token || "";
+    if (!pageToken) break;
+  }
+  return out;
+}
+
 /* Paging can repeat an entry across a page boundary, and a duplicate in a
    picker looks like a bug in the app rather than in the cursor. */
 function dedupeModels(models) {
@@ -439,6 +661,7 @@ function isOffline() {
 
 function describeStatus(status, detail) {
   if (status === 401) return "The provider rejected that API key.";
+  if (status === 410) return "This provider has been retired.";
   if (status === 403) return "That key is not allowed to use this model.";
   if (status === 404) return "That model id was not found on this account.";
   if (status === 429) return "Rate limited or out of quota. Wait a moment and try again.";
@@ -451,6 +674,7 @@ function describeStatus(status, detail) {
    reason in the body, so that one case is sniffed rather than mapped. */
 function describeListStatus(status, detail) {
   if (status === 401) return "The provider rejected that API key.";
+  if (status === 410) return "This provider has been retired.";
   if (status === 400 && /api[\s_-]?key/i.test(detail)) return "The provider rejected that API key.";
   if (status === 403) return "That key is not allowed to list models.";
   if (status === 404) return "The provider has no model list at that address.";
