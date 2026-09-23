@@ -6,7 +6,7 @@
 <meta name="color-scheme" content="light dark">
 <meta name="description" content="Private drafting, review, and publication record for Safe Cycle Tech social posts.">
 <meta name="referrer" content="no-referrer">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-D1ulId0J/8k4GJqfIEckWcg1QsDY6KsFmTBjX03mypA=' 'sha256-6G3FdvPD7BdGFp3sKwxVIc2k7riDC+GX72r5Lt1HFKM=' 'sha256-0Xmr5+JqbwItou3oBVkX7bPjKFn6L3zZRBlhNWi/f5Y=' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; connect-src 'self' https://baiojghilzxhkebfblzv.supabase.co wss://baiojghilzxhkebfblzv.supabase.co https://api.openai.com https://api.anthropic.com https://generativelanguage.googleapis.com https://api.groq.com https://api.cerebras.ai https://openrouter.ai https://api.mistral.ai https://api.cohere.com https://router.huggingface.co; img-src 'self' data: blob:; font-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-src 'none'; worker-src 'self'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-D1ulId0J/8k4GJqfIEckWcg1QsDY6KsFmTBjX03mypA=' 'sha256-xbHmLz8D7acOwivJvV0XHc8MyDqQxuZRkq5PnzbQMr8=' 'sha256-0Xmr5+JqbwItou3oBVkX7bPjKFn6L3zZRBlhNWi/f5Y=' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; connect-src 'self' https://baiojghilzxhkebfblzv.supabase.co wss://baiojghilzxhkebfblzv.supabase.co https://api.openai.com https://api.anthropic.com https://generativelanguage.googleapis.com https://api.groq.com https://api.cerebras.ai https://openrouter.ai https://api.mistral.ai https://api.cohere.com https://router.huggingface.co; img-src 'self' data: blob:; font-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-src 'none'; worker-src 'self'">
 <title>Safe Cycle Studio</title>
 
 <!-- Theme bootstrap. Runs before the stylesheet paints so a dark-mode visitor
@@ -47,17 +47,21 @@
 <script type="importmap">
 {
   "imports": {
-    "./js/config.js":    "./js/config.js?v=3.11.0",
-    "./js/data.js":      "./js/data.js?v=3.11.0",
-    "./js/platforms.js": "./js/platforms.js?v=3.11.0",
-    "./js/providers.js": "./js/providers.js?v=3.11.0",
-    "./js/settings.js":  "./js/settings.js?v=3.11.0",
-    "./js/signature.js": "./js/signature.js?v=3.11.0",
-    "./js/sync.js":      "./js/sync.js?v=3.11.0",
-    "./js/theme.js":     "./js/theme.js?v=3.11.0",
-    "./js/timing.js":    "./js/timing.js?v=3.11.0",
-    "./js/ui.js":        "./js/ui.js?v=3.11.0",
-    "./js/voice.js":     "./js/voice.js?v=3.11.0"
+    "./js/automation-ui.js": "./js/automation-ui.js?v=3.12.0",
+    "./js/automation.js": "./js/automation.js?v=3.12.0",
+    "./js/cadence.js": "./js/cadence.js?v=3.12.0",
+    "./js/publication.js": "./js/publication.js?v=3.12.0",
+    "./js/config.js":    "./js/config.js?v=3.12.0",
+    "./js/data.js":      "./js/data.js?v=3.12.0",
+    "./js/platforms.js": "./js/platforms.js?v=3.12.0",
+    "./js/providers.js": "./js/providers.js?v=3.12.0",
+    "./js/settings.js":  "./js/settings.js?v=3.12.0",
+    "./js/signature.js": "./js/signature.js?v=3.12.0",
+    "./js/sync.js":      "./js/sync.js?v=3.12.0",
+    "./js/theme.js":     "./js/theme.js?v=3.12.0",
+    "./js/timing.js":    "./js/timing.js?v=3.12.0",
+    "./js/ui.js":        "./js/ui.js?v=3.12.0",
+    "./js/voice.js":     "./js/voice.js?v=3.12.0"
   }
 }
 </script>
@@ -90,7 +94,7 @@ window.addEventListener('DOMContentLoaded', function () {
 });
 </script>
 
-<link rel="stylesheet" href="styles.css?v=3.11.0">
+<link rel="stylesheet" href="styles.css?v=3.12.0">
 <!-- Fonts are self-hosted in assets/fonts and declared in styles.css. No
      third-party font CDN: a Google Fonts link would hand the IP and
      referring page of every visitor to another company, which is not what
@@ -101,7 +105,7 @@ window.addEventListener('DOMContentLoaded', function () {
 <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
 <link rel="manifest" href="manifest.webmanifest">
 </head>
-<body data-build="3.11.0">
+<body data-build="3.12.0">
 
 <a class="skip-link" href="#view">Skip to content</a>
 
@@ -196,6 +200,7 @@ window.addEventListener('DOMContentLoaded', function () {
       <button class="nav-btn" type="button" data-nav="compose"><svg class="ico"><use href="#i-spark"></use></svg><span>New draft</span></button>
       <button class="nav-btn" type="button" data-nav="library"><svg class="ico"><use href="#i-library"></use></svg><span>Library</span><span class="nav-count" id="count-library"></span></button>
       <button class="nav-btn" type="button" data-nav="queue"><svg class="ico"><use href="#i-calendar"></use></svg><span>Queue</span><span class="nav-count" id="count-queue"></span></button>
+      <button class="nav-btn" type="button" data-nav="automation"><svg class="ico"><use href="#i-clock"></use></svg><span>Automation</span><span class="nav-count" id="count-automation"></span></button>
       <button class="nav-btn" type="button" data-nav="runs"><svg class="ico"><use href="#i-activity"></use></svg><span>Model runs</span></button>
       <button class="nav-btn" type="button" data-nav="deleted"><svg class="ico"><use href="#i-trash"></use></svg><span>Deleted</span><span class="nav-count" id="count-deleted"></span></button>
       <button class="nav-btn" type="button" data-nav="settings"><svg class="ico"><use href="#i-gear"></use></svg><span>Settings</span></button>
@@ -285,6 +290,6 @@ window.addEventListener('DOMContentLoaded', function () {
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.111.0/dist/umd/supabase.min.js"
         integrity="sha384-fPWur1rx/DE6YtXP/x0MD6dd90RgnVsz5yX/DIg7CcVAnTBZsENWuIcpvVTM39ti"
         crossorigin="anonymous" referrerpolicy="no-referrer"></script>
-<script type="module" src="js/app.js?v=3.11.0"></script>
+<script type="module" src="js/app.js?v=3.12.0"></script>
 </body>
 </html>

@@ -1,13 +1,14 @@
 {
   "name": "safe-cycle-studio",
-  "version": "3.11.0",
+  "version": "3.12.0",
   "private": true,
   "type": "module",
   "description": "Private drafting, review, and publication record for Safe Cycle Tech social posts. Static site, no build step.",
   "scripts": {
     "serve": "python3 -m http.server 8000",
     "test": "node --test",
-    "check": "node --check js/app.js && node --check js/config.js && node --check js/data.js && node --check js/platforms.js && node --check js/providers.js && node --check js/settings.js && node --check js/sync.js && node --check js/theme.js && node --check js/timing.js && node --check js/ui.js && node --check js/voice.js && node --check worker/src/index.js && node --test"
+    "check": "node --check js/app.js && node --check js/automation.js && node --check js/automation-ui.js && node --check js/cadence.js && node --check js/publication.js && node --check js/config.js && node --check js/data.js && node --check js/platforms.js && node --check js/providers.js && node --check js/settings.js && node --check js/sync.js && node --check js/theme.js && node --check js/timing.js && node --check js/ui.js && node --check js/voice.js && node --check worker/src/index.js && node --check publisher/cli.js && node --check publisher/browser.js && node --check publisher/engine.js && node --check publisher/store.js && node --test",
+    "publisher:once": "node publisher/cli.js once"
   },
   "engines": {
     "node": ">=20"

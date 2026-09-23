@@ -1,0 +1,7 @@
+publisher/node_modules/
+publisher/.local/
+# Runner state (browser profiles, sessions, logs) wherever it is created.
+.local/
+.env
+.env.*
+!*.example

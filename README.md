@@ -47,7 +47,7 @@ npm run check
 The repository is designed for GitHub Pages from the root of `main`.
 
 ```bash
-git add index.html styles.css js package.json README.md tests
+git add .gitattributes .gitignore index.html styles.css js package.json README.md tests publisher
 git commit -m "Update Safe Cycle Studio"
 git push origin main
 ```
@@ -56,6 +56,10 @@ The `BUILD` value in `js/config.js` must match the stylesheet token, HTML body,
 entry-point query, stylesheet query, and every local module in the import map.
 The test suite enforces this to prevent mixed cached deployments.
 
+`.gitattributes` keeps `index.html` at LF line endings in every checkout. The
+Content-Security-Policy hashes of its inline scripts are computed from the LF
+bytes, so a CRLF copy would block those scripts; do not remove that file.
+
 ## Data behavior
 
 Edits are debounced and automatically saved as row deltas. Keystrokes in a
@@ -63,5 +67,8 @@ post stage only that post. If another device updates the same workspace first,
 the app presents a conflict choice instead of silently overwriting either
 version. JSON exports remain complete portable backups.
 
-Publishing stays manual: the application prepares copy and records publication
-details but never posts to a social platform.
+Automatic publishing is opt-in and uses the separate browser-only `publisher/`
+runtime on an always-on computer. The static site never submits to social
+platforms; its Automation section shows the runner's status, failures and
+anything held for review. Dry-run is the default; see
+[publisher setup](publisher/README.md). Manual handoff remains available.

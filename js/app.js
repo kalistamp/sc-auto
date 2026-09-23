@@ -8,16 +8,17 @@
    data and patches one node, or navigates and rebuilds the view, but
    never both at once.
 
-   Workflow, in one line: draft with a model → review and edit →
-   approve → copy or open the platform → publish it yourself → paste
-   the URL back. Nothing in this file posts to a social platform, and
-   nothing ever will; that boundary is the point.
+   Draft, review, schedule and record here. Opted-in publication runs in
+   the separate publisher/ browser process; this browser bundle never submits.
    ============================================================ */
 
+import { automationView, automationAttention, imageChoices, attemptBadge, toggleField } from "./automation-ui.js";
+import { AUTOMATION_LABELS, AUTOMATION_PLATFORMS, automationErrors, approvalMaterial, destinationFor, listingErrors, pickSubreddit, subredditsOf } from "./automation.js";
+import { recordListingPublication, recordPublication } from "./publication.js";
 import { BUILD, DELETED_RETENTION_DAYS } from "./config.js";
 import {
   STATUS_LABELS,
-  addActivity, addRun, allVariants, countsFor, createDefaultData, createExternalPost,
+  addActivity, addRun, allVariants, countsFor, createDefaultData, createExternalPost, createId,
   createPostFromGeneration, deletionDaysLeft, deletionExpiresAt, derivePostStatus,
   findSimilarPosts, getPlatform,
   isOverdue, isQueued, isScheduled, listPlatforms, migrateData, normalizePlatform, nowIso,
@@ -33,7 +34,7 @@ import {
   readDraftBrief, readModelCatalog, readPrefs, writeCredentials, writeDraftBrief,
   writeModelCatalog, writePrefs
 } from "./settings.js";
-import { getCurrentUser, signInWithPassword, signOutUser, SyncError, Workspace } from "./sync.js";
+import { getCurrentUser, signInWithPassword, signOutUser, SyncError, Workspace, publisherCommand, uploadAutomationImage } from "./sync.js";
 import { THEMES, applyTheme, currentTheme, setTheme, toggleTheme, watchSystemTheme } from "./theme.js";
 import {
   TIMING_DISCLAIMER, TIMING_RESEARCH_DATE, bestTimeFor, describeSlot, formatWindow,
@@ -49,6 +50,8 @@ const workspace = new Workspace();
 
 const state = {
   data: null,
+  publisher: null,
+  publisherError: "",
   view: "overview",
   postId: "",
   generating: false,
@@ -65,6 +68,7 @@ const VIEWS = {
   compose:  { title: "New draft", sub: "Turn a brief into platform-ready copy", render: renderCompose },
   library:  { title: "Library", sub: "Every draft and publication record", render: renderLibrary },
   queue:    { title: "Queue", sub: "Approved and scheduled, in date order", render: renderQueue },
+  automation: { title: "Automation", sub: "Automatic posting, runner status, and failures", render: renderAutomation },
   runs:     { title: "Model runs", sub: "Which model produced what, and when", render: renderRuns },
   deleted:  { title: "Deleted posts", sub: `Recoverable for ${DELETED_RETENTION_DAYS} days`, render: renderDeleted },
   settings: { title: "Settings", sub: "Organization context, sync, and data", render: renderSettings },
@@ -207,6 +211,7 @@ async function enterStudio({ silent = false } = {}) {
 
   render();
   paintSyncState(workspace.status);
+  void refreshPublisherStatus();
 }
 
 async function retryLoad() {
@@ -433,6 +438,12 @@ function paintNav() {
   queue.textContent = counts.queued ? String(counts.queued) : "";
   queue.className = `nav-count${counts.overdue ? " is-hot" : ""}`;
   if (deleted) deleted.textContent = counts.deleted ? String(counts.deleted) : "";
+  const automation = el("#count-automation");
+  const issues = automationAttention(state.data, state.publisher, state.publisherError).length;
+  if (automation) {
+    automation.textContent = issues ? String(issues) : "";
+    automation.className = `nav-count${issues ? " is-hot" : ""}`;
+  }
 }
 
 function paintSideModel() {
@@ -467,6 +478,8 @@ function renderOverview() {
       </div>
     </section>
 
+    ${automationBanner()}
+
     <div class="stat-row">
       ${statTile("Needs review", counts.needsReview, "Drafts waiting on you", { hot: counts.needsReview > 0, nav: "library", filter: "review" })}
       ${statTile("Approved", counts.approved, "Ready to post", { nav: "queue" })}
@@ -490,7 +503,7 @@ function renderOverview() {
 
       <section class="card">
         <header class="card-head">
-          <div><h3>Up next</h3><p>Scheduled for a person to post</p></div>
+          <div><h3>Up next</h3><p>Scheduled posts, automatic and by hand</p></div>
           <span class="spacer"></span>
           <button class="btn btn-quiet btn-sm" type="button" data-nav="queue">Queue ${icon("arrow-right")}</button>
         </header>
@@ -505,7 +518,7 @@ function renderOverview() {
     <h2 class="section-title">${icon("external")} Your platforms</h2>
     <section class="card">
       <header class="card-head">
-        <div><h3>When to post, and where</h3><p>A research-backed window for each platform, and its front door. Nothing is posted for you.</p></div>
+        <div><h3>When to post, and where</h3><p>A research-backed window for each platform, and its front door. Opted-in posts can be dispatched by your browser runner.</p></div>
         <span class="spacer"></span>
         <button class="btn btn-quiet btn-sm" type="button" data-act="platform-add">${icon("plus")} Add platform</button>
         <button class="btn btn-quiet btn-sm" type="button" data-nav="settings">Manage ${icon("arrow-right")}</button>
@@ -533,6 +546,17 @@ function renderOverview() {
           : `<p class="muted">Activity shows up here as you draft, approve, and publish.</p>`}
       </div>
     </section>`;
+}
+
+/* Automatic posting problems surface on the first page anyone opens, not
+   only on the Automation page — a stopped runner posts nothing, quietly. */
+function automationBanner() {
+  const issues = automationAttention(state.data, state.publisher, state.publisherError);
+  if (!issues.length) return "";
+  return `<div class="notice is-warn auto-banner">${icon("alert")}
+    <span><strong>Automatic posting needs you.</strong> ${esc(issues[0].text)}${issues.length > 1 ? ` ${esc(plural(issues.length - 1, "more item"))} on the Automation page.` : ""}</span>
+    <button class="btn btn-soft btn-sm" type="button" data-nav="automation">Open Automation</button>
+  </div>`;
 }
 
 /* The platforms worth showing a front door for: switched on, not retired.
@@ -631,7 +655,7 @@ function greeting() {
 }
 
 function overviewLede(counts) {
-  if (counts.overdue) return `${plural(counts.overdue, "scheduled post")} ${counts.overdue === 1 ? "is" : "are"} past its date. Publishing is manual, so nothing went out on its own.`;
+  if (counts.overdue) return `${plural(counts.overdue, "scheduled post")} ${counts.overdue === 1 ? "is" : "are"} past its date. Check the automation status and publication attempts before posting manually.`;
   if (counts.needsReview) return `${plural(counts.needsReview, "draft")} waiting for your review.`;
   if (counts.approved) return `${plural(counts.approved, "approved post")} ready to copy and publish.`;
   return "Nothing is waiting. A good moment to write something new.";
@@ -768,7 +792,7 @@ function renderCompose() {
                 <div class="field">
                   <label for="b-when">Target date</label>
                   <input class="input" id="b-when" name="scheduledAt" type="datetime-local" value="${esc(toLocalInput(brief.scheduledAt))}">
-                  <p class="hint">Puts it in the Queue once you approve it. Nothing posts on a timer.</p>
+                  <p class="hint">Puts it in the Queue. Automatic delivery also requires explicit automation opt-in.</p>
                 </div>
                 <div class="field">
                   <label for="b-tags">Tags</label>
@@ -1140,7 +1164,7 @@ function renderQueue() {
       <div class="page-head-main">
         <p class="eyebrow">Queue</p>
         <h2>${items.length ? plural(items.length, "post") + " to publish" : "Nothing queued"}</h2>
-        <p class="lede">A date here is a reminder for you, not an instruction to a machine. Nothing leaves this studio without you copying it across.</p>
+        <p class="lede">Opted-in posts are dispatched by the browser runner after checks and cadence limits. Dry-run sends nothing; other posts use manual handoff.</p>
       </div>
     </section>
 
@@ -1166,6 +1190,18 @@ function renderQueue() {
       </section>` : ""}`;
 }
 
+/* ============================================================
+   VIEW — AUTOMATION
+
+   The separate runner's status, what it needs from a person, and the
+   policy it follows. Rendered by js/automation-ui.js from the workspace
+   and the publisher journal.
+   ============================================================ */
+
+function renderAutomation() {
+  return automationView(state.data, state.publisher, state.publisherError);
+}
+
 /* A row with two ways in: the body of it opens the draft to work on,
    and the eye opens the reader.
 
@@ -1181,11 +1217,12 @@ function queueItem({ post, variant }) {
       <span class="pip" style="background:${meta?.color}">${esc((meta?.label || "?")[0])}</span>
       <span class="row-main">
         <span class="row-title">${esc(post.campaign)}</span>
-        <span class="row-sub">${esc(firstLine(variant.body) || "No copy yet")}</span>
+        <span class="row-sub">${variant.platform === "reddit" && variant.subreddit ? `<strong>r/${esc(variant.subreddit)}</strong> · ` : ""}${esc(firstLine(variant.body) || "No copy yet")}</span>
       </span>
     </button>
     <span class="row-side">
       <span class="badge ${variant.status}">${esc(STATUS_LABELS[variant.status])}</span>
+      ${attemptBadge(variant, state.publisher, state.data.automation.dryRun)}
       <span class="stamp">${variant.scheduledAt ? esc(fmtTime(variant.scheduledAt)) : "—"}</span>
       <button class="icon-btn" type="button" data-act="read-post" data-variant="${esc(variant.id)}"
               title="Read the full post">${icon("eye")}</button>
@@ -1413,7 +1450,7 @@ function renderEditor() {
       <div class="page-head-main">
         <button class="crumb" type="button" data-nav="library">${icon("chevron", "")} Library</button>
         <h2>${esc(post.campaign)}</h2>
-        <p class="lede">${esc(post.objective || "Review each platform version, approve it, then publish it yourself.")}</p>
+        <p class="lede">${esc(post.objective || "Review each platform version, approve it, then publish it — by hand, or automatically where you opt it in.")}</p>
         <div class="row-meta">
           <span class="badge ${status}">${esc(STATUS_LABELS[status])}</span>
           ${post.source === "external" ? `<span class="badge external">${icon("link")} Recorded from platform</span>` : receiptChip(post.ai)}
@@ -1564,12 +1601,14 @@ function variantCard(post, variant) {
       </div>
 
       ${readyBlock(variant, meta)}
+      ${published ? "" : `<button class="btn btn-ghost btn-sm" type="button" data-act="automation-variant" data-variant="${esc(variant.id)}">${variant.automation?.optIn ? "Review automation / images" : "Set up automatic delivery / images"}</button>`}
+      ${attemptBadge(variant, state.publisher, state.data.automation.dryRun)}
 
       <div class="field">
         <label for="s-${esc(variant.id)}">Planned date</label>
         <input class="input" id="s-${esc(variant.id)}" type="datetime-local" data-variant="${esc(variant.id)}" data-field="scheduledAt"
                value="${esc(toLocalInput(variant.scheduledAt))}" ${published ? "readonly" : ""}>
-        <p class="hint">A reminder for you. It puts this in the Queue; nothing posts on a timer.</p>
+        <p class="hint">The browser runner can dispatch opted-in copy at an eligible time. Manual posts remain reminders.</p>
         ${published ? "" : timingHint(variant.platform, { withApply: true })}
       </div>
 
@@ -1849,8 +1888,9 @@ function renderSettings() {
             ${listPlatforms().map((platform) => platformRow(platform)).join("")}
 
             <p class="hint" style="margin-top:.8rem">
-              This studio never posts anything anywhere. It writes the copy, checks it, keeps the record,
-              and opens the platform's own page so you can paste it in yourself.
+              These steps are the manual route, and it always works. Automatic posting — the runner, its
+              schedule, and anything it needs from you — lives under
+              <button class="linkish" type="button" data-nav="automation">Automation</button>.
             </p>
           </div>
         </section>
@@ -2038,7 +2078,7 @@ function openPlatformDialog(key = "") {
       <div class="modal-head">
         <div>
           <h2>${editing ? `Edit ${esc(platform.label)}` : "Add a platform"}</h2>
-          <p>Nothing here publishes for you. A platform is a name, the limits to check copy against, and a link to its own page so you can go and paste.</p>
+          <p>This defines copy limits and a manual handoff link. Browser automation is configured separately; adding a platform does not install a publisher.</p>
         </div>
         <button class="icon-btn" type="button" data-close aria-label="Close">${icon("x")}</button>
       </div>
@@ -2236,9 +2276,16 @@ function openSyncDialog() {
             </div>`).join("")}
         </section>
 
+        <section class="modal-section" style="margin-top:1rem">
+          <h3>Automatic posting</h3>
+          ${toggleField("runnerModel", Boolean(state.publisher?.runnerModel) || state.data.automation.enabled,
+            "The runner writes with this model too",
+            "Saves the chosen provider, model and key to your Supabase workspace, where only your account can read them, so the always-on runner writes new posts with whatever you pick here. Switch it off to keep keys on this device only.")}
+        </section>
+
         <div class="notice">
           ${icon("shield")}
-          <span><strong>Model API keys never leave this browser.</strong> They are not written to Supabase and are not part of a backup. On another device you enter them once more.</span>
+          <span><strong>Model API keys stay in this browser</strong> unless the switch above shares the chosen one with the runner. Keys are never part of a backup. On another device you enter them once more.</span>
         </div>
       </div>
 
@@ -2413,10 +2460,23 @@ async function submitSyncForm(form) {
     writeCredentials(next);
     workspace.refreshCredentials();
 
+    /* The runner follows this dialog, so changing provider here changes it
+       there too. A failure to share leaves the device settings saved. */
+    let shared = "";
+    try {
+      if (values.has("runnerModel")) {
+        state.publisher = await publisherCommand("model-set", { provider: next.provider, model: next.models[next.provider],
+          effort: next.effort, key: next.keys[next.provider] });
+        shared = " and shared with the runner";
+      } else if (state.publisher?.runnerModel) {
+        state.publisher = await publisherCommand("model-clear");
+      }
+    } catch (error) { shared = `. The runner was not updated: ${error.message}`; }
+
     closeModal();
     render();
     paintSyncState(workspace.status);
-    toast("Model settings saved on this device", { kind: "good" });
+    toast(`Model settings saved on this device${shared}`, { kind: shared.startsWith(".") ? "error" : "good" });
   } catch (error) {
     button.disabled = false;
     button.textContent = "Save model settings";
@@ -2482,6 +2542,7 @@ async function openHistoryDialog() {
 function openPublishDialog(variantId) {
   const { post, variant } = findVariant(variantId);
   if (!variant) return;
+  if (variant.automation?.optIn && variant.status !== "published") return toast("This version is set to post automatically. Turn that off under Set up automatic delivery, and check Automation for an attempt in progress, before recording it by hand.", { kind: "error" });
   const meta = getPlatform(variant.platform);
   const editing = variant.status === "published";
 
@@ -2529,13 +2590,14 @@ function openPublishDialog(variantId) {
 function openScheduleDialog(variantId) {
   const { variant } = findVariant(variantId);
   if (!variant) return;
+  const automatic = state.data.automation.enabled && state.data.automation.platforms[variant.platform]?.enabled;
 
   openModal(`
     <form class="modal-inner" id="schedule-form" data-variant="${esc(variantId)}">
       <div class="modal-head">
         <div>
           <h2>Plan a date</h2>
-          <p>A reminder for you. This studio does not post on a timer — the date just puts it in the queue.</p>
+          <p>Sets the planned time. The separate browser runner dispatches opted-in posts after content and cadence checks.</p>
         </div>
         <button class="icon-btn" type="button" data-close aria-label="Close">${icon("x")}</button>
       </div>
@@ -2545,6 +2607,9 @@ function openScheduleDialog(variantId) {
           <input class="input" id="sc-at" name="at" type="datetime-local" required
                  value="${esc(toLocalInput(variant.scheduledAt || defaultScheduleTime(variant.platform)))}" data-autofocus>
         </div>
+        ${variant.platform === "reddit" && subredditsOf(state.data.automation).length ? subredditChoice(variant) : ""}
+        ${automatic ? toggleField("autoPost", variant.automation?.optIn ?? true, "Post it automatically at this time",
+          "You approved this text, so the runner sends it exactly as it is, within your posting limits. Editing it afterwards sends it back through the checks.") : ""}
         ${timingDetail(variant.platform, { withApply: true })}
       </div>
       <div class="modal-foot">
@@ -2553,6 +2618,19 @@ function openScheduleDialog(variantId) {
         <button class="btn btn-primary" type="submit">Add to queue</button>
       </div>
     </form>`);
+}
+
+/* Which subreddit a Reddit version goes to. Preselected: the one already
+   chosen, else the enabled subreddit that has waited longest and is free. */
+function subredditChoice(variant) {
+  const enabled = subredditsOf(state.data.automation).filter((entry) => entry.enabled);
+  const chosen = variant.subreddit || pickSubreddit(state.data.automation, state.data.posts, Date.now(), variant.id) || "";
+  return `<div class="field"><label for="sc-subreddit">Subreddit</label>
+    <select class="input" id="sc-subreddit" name="subreddit">
+      <option value="" ${chosen ? "" : "selected"}>${enabled.length ? "Choose a subreddit" : "No subreddit is switched on yet"}</option>
+      ${enabled.map((entry) => `<option value="${esc(entry.name)}" ${entry.name === chosen ? "selected" : ""}>r/${esc(entry.name)}</option>`).join("")}
+    </select>
+    <p class="hint">One post goes to one subreddit. The runner suggests the one that has waited longest; the list is on the Automation page.</p></div>`;
 }
 
 /* What the date box starts on when nothing has been planned yet.
@@ -2993,7 +3071,7 @@ function openReaderDialog(variantId) {
 function openShortcutsDialog() {
   const rows = [
     ["g then o", "Overview"], ["g then c", "New draft"], ["g then l", "Library"],
-    ["g then q", "Queue"], ["g then r", "Model runs"], ["g then d", "Deleted posts"],
+    ["g then q", "Queue"], ["g then a", "Automation"], ["g then r", "Model runs"], ["g then d", "Deleted posts"],
     ["g then s", "Settings"],
     ["n", "Start a draft"], ["/", "Search the library"], ["t", "Toggle light and dark"],
     ["Esc", "Close a dialog or the menu"], ["?", "This list"]
@@ -3078,6 +3156,15 @@ function handleAction(act, node, event) {
       return;
     }
 
+    case "automation-refresh": return refreshPublisherStatus();
+    case "automation-resume": return resumePublisher();
+    case "automation-resolve": return openResolveAttempt(node.dataset.attempt);
+    case "automation-variant": return openAutomationVariant(variantId);
+    case "automation-facts": return queueApprovedFacts();
+    case "listing-toggle": return toggleListing(node.dataset.listing);
+    case "listing-approve": return approveListing(node.dataset.listing);
+    case "topic-remove": return removeTopic(node.dataset.topicId);
+    case "topic-retry": return retryTopic(node.dataset.topicId);
     case "copy": return copyVariant(variantId);
     case "open-platform": return openPlatform(variantId);
 
@@ -3236,6 +3323,7 @@ function onSubmit(event) {
   const form = event.target;
   event.preventDefault();
 
+  if (form.id.startsWith("automation-")) return submitAutomationForm(form);
   if (form.id === "brief-form") return runGeneration();
   if (form.id === "org-form") return saveOrganization(form);
   if (form.id === "sync-form") return submitSyncForm(form);
@@ -3255,7 +3343,7 @@ function onKeydown(event) {
 
   if (state.keySequence === "g") {
     state.keySequence = "";
-    const target = { o: "overview", c: "compose", l: "library", q: "queue", r: "runs", d: "deleted", s: "settings" }[event.key];
+    const target = { o: "overview", c: "compose", l: "library", q: "queue", a: "automation", r: "runs", d: "deleted", s: "settings" }[event.key];
     if (target) { event.preventDefault(); navigate(target); }
     return;
   }
@@ -3343,6 +3431,253 @@ function openPlatform(variantId) {
   toast(`Copy is on the clipboard — log in and paste it into ${label}`);
 }
 
+/* The journal is read on demand — sign-in, the pages that show it, and the
+   Refresh button — and only a real change repaints, so a form half filled
+   in on the Automation page is not wiped by a refresh that found nothing new. */
+async function refreshPublisherStatus(repaint = true) {
+  if (!workspace.connected) return;
+  const before = JSON.stringify([state.publisher, state.publisherError]);
+  try { state.publisher = await publisherCommand("read"); state.publisherError = ""; }
+  catch { state.publisherError = "Publisher storage is unavailable, so the runner's status cannot be shown. Apply publisher/migrations/001_publisher.sql before turning automation on."; }
+  paintNav();
+  const changed = JSON.stringify([state.publisher, state.publisherError]) !== before;
+  if (repaint && changed && ["overview", "queue", "automation"].includes(state.view)) render();
+}
+
+async function resumePublisher() {
+  try { state.publisher = await publisherCommand("resume"); render(); }
+  catch (error) { toast(error.message, { kind: "error" }); }
+}
+
+function disarmAutomation(data) {
+  data.automation.enabled = false; data.automation.dryRun = true;
+  for (const post of data.posts) for (const variant of post.variants) variant.automation = { optIn: false, approval: "", reviewReasons: [] };
+  for (const listing of data.automation.listings) listing.enabled = false;
+}
+
+/* ---- automatic delivery, per version -------------------------------
+
+   Where a person opts one version in, picks its images, and — when the
+   runner has held it — reads why and approves the exact copy. Approval
+   binds these words, this destination and these images; any edit
+   afterwards takes it away again. */
+function openAutomationVariant(id) {
+  const { post, variant } = findVariant(id);
+  if (!variant || variant.status === "published") return;
+  const destination = destinationFor(state.data.automation, variant);
+  const checks = variantChecks(variant, state.data.organization);
+  const held = variant.automation?.reviewReasons || [];
+  openModal(`<form class="modal-inner" id="automation-variant-form" data-variant="${esc(id)}">
+    <div class="modal-head">
+      <div><h2>Automatic delivery</h2><p>The ${esc(platformLabel(variant.platform))} version of "${esc(post.campaign)}"</p></div>
+      <button class="icon-btn" type="button" data-close aria-label="Close">${icon("x")}</button>
+    </div>
+    <div class="modal-scroll">
+      ${held.length ? `<div class="notice is-warn">${icon("alert")}<span><strong>The runner is holding this for you.</strong> ${esc(held.join(" "))}</span></div>` : ""}
+      <section class="ready" aria-label="Exactly what will be posted" style="margin-top:.9rem"><pre class="ready-text">${esc(buildCopyText(variant))}</pre></section>
+      <dl class="facts" style="margin-top:.9rem">
+        <dt>Starts from</dt><dd>${esc(destination || "Not set yet — add it on the Automation page")}</dd>
+        <dt>Planned for</dt><dd>${variant.scheduledAt ? esc(fmtDateTime(variant.scheduledAt)) : "No date yet — set a planned date on the draft"}</dd>
+      </dl>
+      ${checks.length ? `<ul class="notes">${checks.map((check) => `<li>${icon(check.level === "error" ? "alert" : "info")}<span>${esc(check.text)}</span></li>`).join("")}</ul>` : ""}
+      <fieldset class="auto-images" style="margin-top:.9rem"><legend class="field-label">Images to attach</legend>${imageChoices(state.data.automation.images || [], variant.photos || [])}</fieldset>
+      ${toggleField("optIn", variant.automation?.optIn, "Post this version automatically", "The runner sends it at its planned time, within the cadence limits.")}
+      ${toggleField("reviewed", false, "I read this exact copy and approve it as written", "Sends it even where a check above would hold it. Errors still block.")}
+    </div>
+    <div class="modal-foot"><span class="spacer"></span>
+      <button class="btn btn-ghost" type="button" data-close>Cancel</button>
+      <button class="btn btn-primary" type="submit">Save delivery settings</button></div>
+  </form>`);
+}
+
+/* ---- an uncertain send ----------------------------------------------
+
+   The one outcome the runner cannot settle for itself: it may have posted.
+   A person looks at the account and says what is there. Recording "live"
+   writes the publication record from the text the runner actually sent;
+   recording "not there" lets the runner try again once posting resumes.
+   Neither posts anything from here. */
+function openResolveAttempt(id) {
+  const attempt = state.publisher?.attempts?.find((entry) => entry.id === id);
+  if (!attempt) return toast("Refresh the Automation page first; that attempt is not loaded.", { kind: "error" });
+  const where = AUTOMATION_LABELS[attempt.platform] || attempt.platform;
+  openModal(`<form class="modal-inner" id="automation-resolve-form" data-attempt="${esc(id)}">
+    <div class="modal-head">
+      <div><h2>What happened to this post?</h2><p>${esc(where)} — started ${esc(fmtDateTime(attempt.claimedAt))}</p></div>
+      <button class="icon-btn" type="button" data-close aria-label="Close">${icon("x")}</button>
+    </div>
+    <div class="modal-scroll">
+      <div class="notice is-warn">${icon("alert")}<span>Stop the runner and wait five minutes — a send still in progress cannot be settled while a runner is checking in — then look at the ${esc(where)} account itself. ${attempt.error ? esc(attempt.error) : ""}</span></div>
+      <section class="ready" aria-label="What the runner sent" style="margin-top:.9rem"><pre class="ready-text">${esc(attempt.snapshot?.body || "")}</pre></section>
+      <div class="field" style="margin-top:.9rem"><label for="resolve-outcome">What you found</label>
+        <select class="input" id="resolve-outcome" name="outcome">
+          <option value="published-externally">It is live — record it as published</option>
+          <option value="not-published">It is not there — the runner may post it again once I resume</option>
+        </select></div>
+      <div class="field"><label for="resolve-url">Link to the live post</label>
+        <input class="input" id="resolve-url" name="url" type="url" placeholder="https://…" value="${esc(attempt.permalink || "")}">
+        <p class="hint">Needed when it is live.</p></div>
+      <div class="field"><label for="resolve-note">What you checked</label>
+        <textarea class="textarea" id="resolve-note" name="note" minlength="10" required placeholder="Opened the Page as a visitor; the post is not there."></textarea></div>
+      ${toggleField("stopped", false, "The runner is stopped and I checked the account", "")}
+    </div>
+    <div class="modal-foot"><span class="spacer"></span>
+      <button class="btn btn-ghost" type="button" data-close>Cancel</button>
+      <button class="btn btn-primary" type="submit">Save what happened</button></div>
+  </form>`);
+}
+
+/* Writes the ordinary publication record for a send a person confirmed,
+   from the text the runner froze when it sent it. */
+function recordConfirmedSend(attempt, url) {
+  const snapshot = attempt.snapshot || {};
+  const at = attempt.submittedAt || nowIso();
+  if (snapshot.postId) {
+    const { post, variant } = findVariant(snapshot.itemId);
+    if (!variant || variant.status === "published") return;
+    recordPublication(state.data, post, variant, { url, at, account: getPlatform(variant.platform).account || "", now: nowIso(), publishedBody: snapshot.body });
+  } else {
+    const listing = state.data.automation.listings.find((entry) => entry.id === snapshot.itemId);
+    if (!listing) return;
+    recordListingPublication(state.data, listing, { url, at, now: nowIso(), publishedBody: snapshot.body });
+  }
+  commit();
+}
+
+/* A Page address as people paste it — "facebook.com/MyPage", with or without
+   https:// — made into the full address the runner compares against. A
+   malformed one is refused with a message rather than silently: a strict
+   type="url" field used to block the whole form with only a small bubble. */
+function pageAddress(value, label) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  try {
+    const url = new URL(/^https?:\/\//i.test(raw) ? raw : `https://${raw}`);
+    if (!url.hostname.includes(".")) throw new Error();
+    return url.href;
+  } catch { throw new Error(`${label}: "${raw}" is not a web address. Paste the page's address from the browser bar.`); }
+}
+
+/* Social topics are stored for every social platform; the runner uses the
+   ones switched on when it writes. */
+const SOCIAL_AUTOMATION = ["facebook", "reddit", "nextdoor"];
+
+function queueApprovedFacts() {
+  let added = 0;
+  for (const fact of state.data.organization.facts) {
+    if (state.data.automation.topics.some((topic) => topic.factText === fact)) continue;
+    state.data.automation.topics.push({ id: createId("topic"), topic: fact, factText: fact, platforms: [...SOCIAL_AUTOMATION], postId: "" });
+    added += 1;
+  }
+  commit(); render();
+  toast(added ? `${plural(added, "approved fact")} queued` : "Every approved fact is already queued");
+}
+
+function toggleListing(id) {
+  const listing = state.data.automation.listings.find((l) => l.id === id);
+  if (!listing) return;
+  listing.enabled = !listing.enabled; commit(); render();
+}
+
+async function approveListing(id) {
+  const listing = state.data.automation.listings.find((entry) => entry.id === id);
+  if (!listing) return;
+  const errors = listingErrors(listing);
+  if (errors.length) return toast(errors[0], { kind: "error" });
+  const ok = await confirmAction({
+    title: "Approve this listing as written?",
+    body: `${listing.title}: ${listing.body}`,
+    confirmLabel: "Approve and enable"
+  });
+  if (!ok) return;
+  const destination = state.data.automation.platforms[listing.platform]?.destination || "";
+  listing.automation = { ...listing.automation, optIn: true, reviewReasons: [],
+    approval: approvalMaterial(listing, state.data.organization, destination, listing.body) };
+  listing.enabled = true;
+  commit(); render();
+  toast("Listing approved", { kind: "good" });
+}
+
+function removeTopic(id) {
+  state.data.automation.topics = state.data.automation.topics.filter((topic) => topic.id !== id);
+  commit(); render();
+}
+
+function retryTopic(id) {
+  const topic = state.data.automation.topics.find((entry) => entry.id === id);
+  if (!topic) return;
+  delete topic.error;
+  topic.failures = 0;
+  topic.lastError = "";
+  commit(); render();
+}
+
+async function submitAutomationForm(form) {
+  const values = new FormData(form), a = state.data.automation;
+  try {
+    if (form.id === "automation-form") {
+      const next = structuredClone(a);
+      next.enabled = values.has("enabled"); next.dryRun = values.has("dryRun");
+      next.timezone = String(values.get("timezone")).trim();
+      next.generationEnabled = values.has("generationEnabled"); next.generationLimit = Number(values.get("generationLimit"));
+      next.repeatDays = Number(values.get("repeatDays"));
+      for (const key of ["daily", "weekly", "gapHours", "quietStart", "quietEnd"]) next.policy[key] = Number(values.get(key));
+      for (const key of AUTOMATION_PLATFORMS) {
+        next.platforms[key].enabled = values.has(`${key}-enabled`);
+        next.platforms[key].destination = pageAddress(values.get(`${key}-destination`), AUTOMATION_LABELS[key]);
+        for (const field of ["gapHours", "daily", "weekly"]) next.platforms[key][field] = Number(values.get(`${key}-${field}`));
+      }
+      next.platforms.reddit.subreddits = [];
+      for (let row = 0; values.has(`sub-name-${row}`); row++) {
+        const name = String(values.get(`sub-name-${row}`) || "").trim().replace(/^\/?r\//i, "");
+        if (!name) continue;
+        const days = Number(values.get(`sub-days-${row}`) || 30);
+        next.platforms.reddit.subreddits.push({ name, flair: String(values.get(`sub-flair-${row}`) || "").trim(),
+          gapDays: Number.isInteger(days) && days >= 1 ? days : 30, enabled: values.has(`sub-on-${row}`),
+          note: String(values.get(`sub-note-${row}`) || "") });
+      }
+      const errors = automationErrors(next); if (errors.length) throw new Error(errors[0]);
+      state.data.automation = next;
+    } else if (form.id === "automation-topics-form") {
+      for (const topic of String(values.get("topics")).split("\n").map((s) => s.trim()).filter(Boolean))
+        a.topics.push({ id: createId("topic"), topic, platforms: [...SOCIAL_AUTOMATION], postId: "" });
+    } else if (form.id === "automation-images-form") {
+      a.images ||= [];
+      for (const file of values.getAll("images")) if (file.size) a.images.push(await uploadAutomationImage(file));
+    } else if (form.id === "automation-listing-form") {
+      if (!values.has("approved")) throw new Error("Confirm that you checked the listing before queueing it.");
+      const listing = { id: createId("listing"), kind: "service", enabled: true, cycle: 0,
+        platform: String(values.get("platform")), title: String(values.get("title")).trim(),
+        body: String(values.get("body")).trim(), category: String(values.get("category")).trim(), area: String(values.get("area")).trim(),
+        photos: values.getAll("photos"), scheduledAt: fromLocalInput(values.get("scheduledAt")),
+        publishedUrl: String(values.get("publishedUrl") || "").trim(), renewDays: Number(values.get("renewDays")),
+        operation: values.get("publishedUrl") ? "renew" : "create", automation: { optIn: true, reviewReasons: [] } };
+      const errors = listingErrors(listing); if (errors.length) throw new Error(errors[0]);
+      listing.automation.approval = approvalMaterial(listing, state.data.organization, a.platforms[listing.platform].destination, listing.body);
+      a.listings.push(listing);
+    } else if (form.id === "automation-variant-form") {
+      const { variant } = findVariant(form.dataset.variant); if (!variant) return;
+      variant.photos = values.getAll("photos");
+      const errors = variantChecks(variant, state.data.organization).filter((c) => c.level === "error");
+      if (values.has("reviewed") && errors.length) throw new Error(errors[0].text);
+      variant.automation = { optIn: values.has("optIn"), reviewReasons: [], approval: values.has("reviewed")
+        ? approvalMaterial(variant, state.data.organization, destinationFor(a, variant), buildCopyText(variant)) : "" };
+      closeModal();
+    } else if (form.id === "automation-resolve-form") {
+      if (!values.has("stopped")) throw new Error("Stop the runner and check the account before recording what happened.");
+      const attempt = state.publisher?.attempts?.find((entry) => entry.id === form.dataset.attempt);
+      const outcome = String(values.get("outcome")), url = String(values.get("url") || "").trim();
+      if (outcome === "published-externally" && !safeUrl(url)) throw new Error("Paste the link to the live post.");
+      state.publisher = await publisherCommand("resolve", { id: form.dataset.attempt, outcome, note: values.get("note") });
+      if (outcome === "published-externally" && attempt) recordConfirmedSend(attempt, url);
+      closeModal(); render();
+      toast(outcome === "published-externally" ? "Recorded as published. Resume posting when you are ready." : "Recorded. The runner may post it again after you resume.", { kind: "good" });
+      return;
+    }
+    commit(); render(); toast("Automation settings saved", { kind: "good" });
+  } catch (error) { toast(error.message, { kind: "error" }); }
+}
+
 function toggleApprove(variantId) {
   const { post, variant } = findVariant(variantId);
   if (!variant || variant.status === "published") return;
@@ -3383,8 +3718,19 @@ function approveAll() {
 function saveSchedule(form) {
   const { post, variant } = findVariant(form.dataset.variant);
   if (!variant) return;
-  variant.scheduledAt = fromLocalInput(new FormData(form).get("at"));
+  const values = new FormData(form);
+  variant.scheduledAt = fromLocalInput(values.get("at"));
   variant.status = "scheduled";
+  if (values.has("subreddit")) variant.subreddit = String(values.get("subreddit") || "");
+  /* Scheduling an approved version with the switch on is the whole of what
+     automatic posting needs: the person approved these words, so the
+     approval is bound to them (and to this destination and these images). */
+  if (form.querySelector('input[name="autoPost"]')) {
+    const destination = destinationFor(state.data.automation, variant);
+    variant.automation = values.has("autoPost")
+      ? { optIn: true, reviewReasons: [], approval: approvalMaterial(variant, state.data.organization, destination, buildCopyText(variant)) }
+      : { optIn: false, approval: "", reviewReasons: [] };
+  }
   post.updatedAt = nowIso();
   addActivity(state.data, "variant", `Queued the ${platformLabel(variant.platform)} version of "${post.campaign}" for ${fmtDateTime(variant.scheduledAt)}`, post.id);
   commit();
@@ -3399,17 +3745,10 @@ function savePublication(form) {
   const values = new FormData(form);
   const wasPublished = variant.status === "published";
 
-  variant.publishedUrl = (values.get("url") || "").trim();
-  variant.publishedAt = fromLocalInput(values.get("at"));
-  variant.account = (values.get("account") || "").trim();
-  /* Freeze what actually went out. The draft can be edited afterwards
-     without the record quietly changing to match. */
-  if (!wasPublished) variant.publishedBody = buildCopyText(variant);
-  variant.status = "published";
-  post.updatedAt = nowIso();
-
-  addActivity(state.data, "publish",
-    `${wasPublished ? "Updated the record for" : "Published"} the ${platformLabel(variant.platform)} version of "${post.campaign}"`, post.id);
+  recordPublication(state.data, post, variant, {
+    url: values.get("url") || "", at: fromLocalInput(values.get("at")),
+    account: values.get("account") || "", now: nowIso()
+  });
   commit();
   closeModal();
   render();
@@ -3486,6 +3825,7 @@ function duplicatePost() {
     variant.publishedAt = "";
     variant.publishedUrl = "";
     variant.publishedBody = "";
+    variant.automation = { optIn: false, approval: "", reviewReasons: [] };
   }
   state.data.posts.unshift(copy);
   addActivity(state.data, "post", `Duplicated "${post.campaign}"`, copy.id);
@@ -3599,8 +3939,10 @@ async function emptyBin() {
    DATA IN AND OUT
    ============================================================ */
 
-function exportJson() {
-  downloadFile(`safecycle-workspace-${new Date().toISOString().slice(0, 10)}.json`, JSON.stringify(state.data, null, 2));
+async function exportJson() {
+  await refreshPublisherStatus(false);
+  const backup = { ...state.data, publisherAudit: state.publisher || null };
+  downloadFile(`safecycle-workspace-${new Date().toISOString().slice(0, 10)}.json`, JSON.stringify(backup, null, 2));
   toast("Backup downloaded");
 }
 
@@ -3671,6 +4013,7 @@ async function importBackup(file) {
     });
     if (!ok) return;
 
+    disarmAutomation(imported);
     imported.revision = state.data.revision;
     adoptData(imported);
     addActivity(state.data, "data", `Imported a backup with ${plural(imported.posts.length, "post")}`);
@@ -3742,6 +4085,7 @@ async function restoreRevision(sha, button) {
   button.innerHTML = `<span class="spinner"></span>`;
   try {
     const restored = await workspace.atRevision(sha);
+    disarmAutomation(restored);
     restored.revision = state.data.revision;
     adoptData(restored);
     addActivity(state.data, "data", "Restored an earlier revision");
@@ -3761,6 +4105,7 @@ async function restoreRevision(sha, button) {
    ============================================================ */
 
 function navigate(view) {
+  if (["overview", "queue", "automation"].includes(view)) void refreshPublisherStatus();
   if (!VIEWS[view]) return;
   state.view = view;
   if (view !== "editor") {

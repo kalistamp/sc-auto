@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 3,
+  "schemaVersion": 4,
   "revision": 0,
   "createdAt": "2026-01-01T00:00:00.000Z",
   "updatedAt": "2026-01-01T00:00:00.000Z",
@@ -100,5 +100,60 @@
   ],
   "posts": [],
   "runs": [],
-  "activity": []
+  "activity": [],
+  "automation": {
+    "enabled": false,
+    "dryRun": true,
+    "timezone": "America/Los_Angeles",
+    "generationEnabled": false,
+    "generationLimit": 1,
+    "repeatDays": 0,
+    "images": [],
+    "policy": {
+      "daily": 1,
+      "weekly": 4,
+      "gapHours": 24,
+      "quietStart": 20,
+      "quietEnd": 8
+    },
+    "platforms": {
+      "facebook": {
+        "enabled": false,
+        "destination": "",
+        "gapHours": 72,
+        "daily": 1,
+        "weekly": 2
+      },
+      "reddit": {
+        "enabled": false,
+        "destination": "",
+        "gapHours": 168,
+        "daily": 1,
+        "weekly": 1
+      },
+      "nextdoor": {
+        "enabled": false,
+        "destination": "",
+        "gapHours": 336,
+        "daily": 1,
+        "weekly": 1
+      },
+      "craigslist": {
+        "enabled": false,
+        "destination": "",
+        "gapHours": 168,
+        "daily": 1,
+        "weekly": 1
+      },
+      "offerup": {
+        "enabled": false,
+        "destination": "",
+        "gapHours": 168,
+        "daily": 1,
+        "weekly": 1
+      }
+    },
+    "topics": [],
+    "listings": []
+  }
 }

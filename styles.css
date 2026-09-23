@@ -118,7 +118,7 @@
        Pages CDN is serving a stale stylesheet and the app says so out
        loud instead of failing in some confusing partial way. Bump it
        together with ?v= on the <link>/<script> and data-build. */
-    --build: "3.11.0";
+    --build: "3.12.0";
 
     color-scheme: light;
 }
@@ -1696,6 +1696,35 @@ table.log .num { font-variant-numeric: tabular-nums; font-family: var(--font-mon
     white-space: nowrap;
 }
 .toast-action:hover { background: var(--accent-soft); }
+
+/* ============================================================
+   AUTOMATION
+   The runner's section. Built from the same rows, toggles and fields
+   as the rest of the app; these rules only fit them together.
+   ============================================================ */
+
+.auto-subhead {
+    font-family: var(--font-body);
+    font-size: .74rem; font-weight: 700; letter-spacing: .08em; text-transform: uppercase;
+    color: var(--ink-faint);
+    margin: 1.3rem 0 .4rem;
+}
+.auto-platform .form-grid { margin-top: .5rem; }
+.auto-subs { margin-top: .6rem; }
+.auto-sub { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) minmax(0, .8fr); gap: 0 .8rem; align-items: end;
+    border-top: 1px solid var(--line); padding-top: .6rem; }
+.auto-sub .toggle-row { grid-column: 1 / -1; border-top: 0; padding-top: 0; }
+@media (max-width: 560px) { .auto-sub { grid-template-columns: minmax(0, 1fr); } }
+.auto-card .hint { font-size: .78rem; color: var(--ink-faint); line-height: 1.45; margin: .35rem 0 .8rem; }
+.auto-images { border: 0; padding: 0; margin: 0 0 1rem; min-width: 0; }
+.auto-image { display: flex; align-items: center; gap: .5rem; font-size: .87rem; padding: .2rem 0; overflow-wrap: anywhere; }
+.row-title .ico { color: var(--warn); vertical-align: -.12em; }
+details.attempt { display: block; }
+details.attempt > summary { cursor: pointer; list-style: none; }
+details.attempt > summary::-webkit-details-marker { display: none; }
+details.attempt .facts dd { overflow-wrap: anywhere; }
+.auto-banner { margin-bottom: 1.2rem; align-items: center; }
+.auto-banner .btn { margin-left: auto; flex: none; }
 
 /* ============================================================
    RESPONSIVE

@@ -32,8 +32,9 @@ import {
   RUN_LOG_LIMIT, SIMILARITY_THRESHOLD
 } from "./config.js";
 import { defaultCtaText } from "./signature.js";
+import { defaultAutomation, normalizeAutomation, automationErrors } from "./automation.js";
 
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 
 /* ============================================================
    PLATFORMS
@@ -44,13 +45,9 @@ export const SCHEMA_VERSION = 3;
    use, removes the ones they do not, and the whole app reads the list
    through the registry below.
 
-   WHAT DOES NOT CHANGE: nothing here publishes anything. A platform is
-   a label, a set of limits to check copy against, and a link to the
-   platform's own front door. The operator opens it, logs in, and pastes
-   the text themselves. `homeUrl` is a home page or login page on
-   purpose — not a composer endpoint and not an API — because the moment
-   this app starts submitting posts it becomes the thing that gets an
-   account banned. See the note in js/platforms.js.
+   This registry contains copy limits and manual handoff links. Browser
+   publishing configuration is separate and lives in automation settings;
+   no code in this module submits to a platform.
    ============================================================ */
 
 /* The neutral option, and the reason it exists: most of the time a small
@@ -358,6 +355,7 @@ export function createDefaultData() {
       prohibitedClaims: [...DEFAULT_RULES]
     },
     platforms: defaultPlatforms(),
+    automation: defaultAutomation(),
     posts: [],
     /* The bin. Posts deleted within the retention window, newest first,
        each carrying the moment it was deleted. */
@@ -400,6 +398,7 @@ export function migrateData(input) {
   data.organization.prohibitedClaims = asStringList(data.organization.prohibitedClaims, DEFAULT_RULES);
 
   data.platforms = migratePlatforms(data);
+  data.automation = normalizeAutomation(data.automation);
   delete data.platformSettings;   /* folded into data.platforms above */
 
   data.posts = (Array.isArray(data.posts) ? data.posts : []).map(migratePost);
@@ -592,7 +591,13 @@ function migrateVariant(variant) {
     scheduledAt,
     publishedAt: String(variant?.publishedAt || ""),
     publishedUrl: String(variant?.publishedUrl || ""),
-    account: String(variant?.account || "")
+    account: String(variant?.account || ""),
+    automation: { optIn: variant?.automation?.optIn === true,
+      approval: String(variant?.automation?.approval || ""),
+      reviewReasons: asStringList(variant?.automation?.reviewReasons, []) },
+    photos: asStringList(variant?.photos, []),
+    /* Reddit only: the one subreddit this version is posted to. */
+    subreddit: String(variant?.subreddit || "")
   };
 }
 
@@ -612,6 +617,7 @@ export function validateData(data) {
   const errors = [];
   if (!data || typeof data !== "object") return ["The workspace file must contain a JSON object."];
   if (data.schemaVersion !== SCHEMA_VERSION) errors.push(`Unsupported schema version: ${data.schemaVersion}.`);
+  if (data.automation) errors.push(...automationErrors(data.automation));
   if (!data.organization || typeof data.organization !== "object") errors.push("Organization settings are missing.");
   if (!Array.isArray(data.posts)) errors.push("Posts must be an array.");
   if (!Array.isArray(data.deleted)) errors.push("Deleted posts must be an array.");
@@ -973,11 +979,12 @@ export function allVariants(data) {
    variant STATUS, and a variant can carry a date while its status is
    still draft or approved.
 
-   A date is the whole of what "scheduled" means here. Nothing in this
-   app publishes on a timer, so the date is a note in a diary: if it is
-   set and the post has not gone out yet, it is on the calendar,
-   whatever else is true about it. Everything that reports a schedule
-   now reads these.
+   A date is the whole of what "scheduled" means here: if it is set and
+   the post has not gone out yet, it is on the calendar, whatever else is
+   true about it. For most posts the date is a note in a diary; only a
+   version opted in to automatic delivery is acted on at that time, by the
+   separate publisher/ runner. Everything that reports a schedule reads
+   these.
    ------------------------------------------------------------ */
 
 export function isScheduled(variant) {

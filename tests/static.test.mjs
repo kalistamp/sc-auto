@@ -102,6 +102,12 @@ test("hardcoded colours stay out of the layout rules", async () => {
 test("no credentials are committed anywhere in the app", async () => {
   const files = ["index.html", "styles.css", "data.template.json", "manifest.webmanifest", "README.md"];
   for (const file of await readdir(new URL("../js", import.meta.url))) files.push(`js/${file}`);
+  /* The runner's source, examples and SQL are committed too. Its secrets
+     live in publisher/.local on the host, which Git ignores. */
+  for (const file of await readdir(new URL("../publisher", import.meta.url))) {
+    if (/\.(?:js|json|md)$/.test(file)) files.push(`publisher/${file}`);
+  }
+  for (const file of await readdir(new URL("../publisher/migrations", import.meta.url))) files.push(`publisher/migrations/${file}`);
 
   for (const file of files) {
     const source = await read(file);
@@ -180,15 +186,30 @@ test("the workspace template matches the schema the app writes", async () => {
   assert.deepEqual(validateData(migrateData(template)), []);
 });
 
-test("nothing in the app can post to a social platform", async () => {
-  /* The whole design rests on publishing staying manual. A write call
-     to a platform API would be a silent change to that promise. */
+test("the static browser bundle cannot publish to social platforms", async () => {
+  /* Publication is confined to publisher/. The UI stores policy and copy;
+     it never imports the runner or drives platform submission itself. */
   for (const file of await readdir(new URL("../js", import.meta.url))) {
     const source = await read(`js/${file}`);
+    assert.doesNotMatch(source, /(?:from|import\s*\()\s*["'][^"']*publisher\//,
+      `${file} imports the separate publisher runtime`);
+    assert.doesNotMatch(source, /graph\.facebook\.com|oauth\.reddit\.com|nextdoor\.com\/external\/api/,
+      `${file} contains a social API endpoint`);
+    assert.doesNotMatch(source, /(?:from|import\s*\()\s*["'](?:playwright|puppeteer)/,
+      `${file} imports browser automation`);
     const posts = [...source.matchAll(/fetch\(\s*[`"']([^`"']+)/g)].map((match) => match[1]);
     for (const url of posts) {
       assert.doesNotMatch(url, /graph\.facebook|api\.linkedin|oauth\.reddit|nextdoor\.com\/api/i,
         `${file} calls a platform publishing API`);
     }
   }
+});
+
+test("the browser's security policy cannot reach a social platform", async () => {
+  /* The page may talk to Supabase and model providers. A platform host in
+     connect-src would let the browser bundle submit to it directly. */
+  const html = await read("index.html");
+  const policy = html.match(/http-equiv="Content-Security-Policy" content="([^"]+)"/)?.[1] || "";
+  const connect = policy.split(";").find((part) => part.trim().startsWith("connect-src")) || "";
+  assert.doesNotMatch(connect, /facebook|reddit|nextdoor|craigslist|offerup|instagram/i);
 });

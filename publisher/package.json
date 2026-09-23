@@ -1,0 +1,24 @@
+{
+  "name": "safe-cycle-publisher",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node cli.js run",
+    "once": "node cli.js once",
+    "test": "node --test tests/database.check.mjs tests/runner.check.mjs tests/browser.check.mjs tests/ui.check.mjs",
+    "test:database": "node --test tests/database.check.mjs",
+    "test:runner": "node --test tests/runner.check.mjs",
+    "test:browser": "node --test tests/browser.check.mjs",
+    "test:ui": "node --test tests/ui.check.mjs"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "2.57.4",
+    "playwright": "1.55.1"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "0.5.8"
+  }
+}

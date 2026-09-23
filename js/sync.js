@@ -48,6 +48,28 @@ function client() {
 
 /* Test-only injection point. It is intentionally not used by the app. */
 export function setSupabaseClientForTests(next) { sharedClient = next; }
+/* The separate Node runner supplies a client with durable host-local auth. */
+export function setSupabaseClient(next) { sharedClient = next; }
+
+export async function publisherCommand(command, args = {}, expectedRevision = null, changes = []) {
+  const { data, error } = await client().schema(SUPABASE_SCHEMA).rpc("publisher_command", {
+    command, payload: args, expected_revision: expectedRevision, changes
+  });
+  if (error) throw new SyncError(error.message || "Publisher storage is unavailable.");
+  return data;
+}
+
+export async function uploadAutomationImage(file) {
+  const user = await getCurrentUser();
+  if (!user) throw new SyncError("Sign in before uploading an image.");
+  if (!["image/jpeg", "image/png", "image/webp"].includes(file.type) || file.size > 10 * 1024 * 1024)
+    throw new SyncError("Use a JPEG, PNG or WebP image smaller than 10 MB.");
+  const extension = { "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp" }[file.type];
+  const path = `${user.id}/${crypto.randomUUID()}.${extension}`;
+  const { error } = await client().storage.from("publisher-images").upload(path, file, { contentType: file.type, upsert: false });
+  if (error) throw new SyncError(error.message);
+  return { path, name: file.name, type: file.type, size: file.size };
+}
 
 export async function getCurrentUser() {
   const auth = client().auth;
@@ -101,7 +123,8 @@ export function flattenWorkspace(input) {
     schemaVersion: data.schemaVersion,
     createdAt: data.createdAt,
     organization: clone(data.organization),
-    platforms: clone(data.platforms)
+    platforms: clone(data.platforms),
+    automation: clone(data.automation)
   });
   for (const [type, values] of [
     ["post", data.posts], ["deleted", data.deleted],

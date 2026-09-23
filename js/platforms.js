@@ -1,33 +1,6 @@
-/* ============================================================
-   SAFE CYCLE STUDIO — platform rules and handoff
-
-   Publishing stays manual by design. Automating the final submission
-   through scraping or browser automation is what puts an account at
-   risk; using a model to help write a post does not. So this module
-   does two things only: it checks a draft against what each platform
-   expects, and it hands the finished text off — to the clipboard, and
-   to the platform's own front door.
-
-   CHANGE (schema 3): the handoff is now identical everywhere. It used to
-   open a composer, and for Reddit it pushed the draft into that composer
-   through URL parameters. Two reasons that went away:
-
-     · It only worked on one platform, so the final step of the workflow
-       behaved differently depending on where you were posting — and the
-       step where a mistake actually publishes something is the worst
-       place to be inconsistent.
-     · Prefilling a composer is this app reaching into a submission form.
-       It stops short of pressing the button, but it is the first inch of
-       a road the project deliberately does not travel, and the stated
-       workflow is: open the platform, log in, paste it yourself.
-
-   So every platform offers exactly one link — its home or login page —
-   and the text travels by clipboard. A platform added years from now
-   works the same way as the ones shipped here.
-
-   No code path in this file, or anywhere in js/, submits a post.
-   tests/static.test.mjs enforces that.
-   ============================================================ */
+/* Platform checks and manual handoff. This browser module never submits.
+   Explicitly opted-in browser publishing belongs to the separate publisher/
+   runtime. tests/static.test.mjs guards this boundary. */
 
 import { getOrganization, getPlatform } from "./data.js";
 import { ctaBlock, duplicateFindings } from "./signature.js";

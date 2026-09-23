@@ -57,6 +57,8 @@ test("session endpoint accepts the right passkey and rejects a wrong one", async
 
 test("workspace write rejects stale revisions and accepts the current revision", async (t) => {
   const workspace = createDefaultData();
+  // This undeployed legacy worker remains on its original schema.
+  workspace.schemaVersion = 3;
   workspace.revision = 4;
   const originalFetch = globalThis.fetch;
   let patchedData = null;

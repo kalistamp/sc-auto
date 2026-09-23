@@ -17,10 +17,9 @@
    model than the one requested, and the record has to show that
    rather than repeat what was asked for.
 
-   Calls go straight from the browser. That is a deliberate trade: this
-   project has no server, so the keys live in your browser instead of
-   in a backend you would have to run. The unused worker/ directory is
-   there if that trade ever stops being the right one.
+   Interactive calls use device-local browser keys. The separate publisher/
+   runner reuses this module with keys provisioned on its own host. Neither
+   path sends model credentials to workspace storage. worker/ remains inert.
    ============================================================ */
 
 import { getPlatform } from "./data.js";

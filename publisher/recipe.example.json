@@ -1,0 +1,26 @@
+{
+  "_instructions": "Copy under recipes.facebook/reddit/nextdoor/craigslist/offerup in the HOST-LOCAL config. Capture exact locators with the Playwright inspector. These example locators are NOT calibrated platform selectors. Run validate on an existing public post before enabling live mode.",
+  "startUrl": "https://www.facebook.com/YOUR_PAGE",
+  "account": "YOUR PAGE NAME",
+  "accountLocator": { "css": "REPLACE_WITH_UNIQUE_ACCOUNT_LOCATOR" },
+  "calibratedAt": "",
+  "samplePermalink": "",
+  "steps": [
+    { "action": "click", "locator": { "role": "button", "name": "REPLACE_COMPOSE_BUTTON" } },
+    { "action": "fill", "locator": { "label": "REPLACE_BODY_FIELD" }, "field": "body" }
+  ],
+  "submit": { "role": "button", "name": "REPLACE_FINAL_PUBLISH_BUTTON" },
+  "permalinkLocator": { "css": "REPLACE_RESULT_PERMALINK" },
+  "verify": {
+    "body": { "css": "REPLACE_PUBLIC_POST_BODY" },
+    "account": { "css": "REPLACE_PUBLIC_POST_AUTHOR" }
+  },
+  "_verifyAs": "Optional. \"public\" (the default) reads the post back in a fresh, signed-out browser context. \"author\" reads it back in this publisher's own signed-in session: required for Nextdoor unless you provide readerStorageState for a second account, and weaker, because it proves the post exists with this text and author, not who else can see it.",
+  "_renew_example": {
+    "_comment": "Listings only. Rename this key to \"renew\" once calibrated. startUrl is the page the renewal starts from (for Craigslist, the account's page for this listing); without it the runner opens the listing's own permalink. confirmLocator is the element that appears once the renewal succeeded; without it the runner waits for the permalink, or reads permalinkLocator.",
+    "startUrl": "https://accounts.craigslist.org/REPLACE_LISTING_MANAGE_PAGE",
+    "steps": [],
+    "submit": { "role": "button", "name": "REPLACE_RENEW_BUTTON" },
+    "confirmLocator": { "css": "REPLACE_RENEWED_CONFIRMATION" }
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "stateDir": "./.local",
+  "timezone": "America/Los_Angeles",
+  "browserChannel": "chrome",
+  "cdpEndpoint": "",
+  "headless": false,
+  "live": false,
+  "pollSeconds": 60,
+  "alertWebhookEnv": "SC_ALERT_WEBHOOK",
+  "heartbeatWebhookEnv": "SC_HEARTBEAT_WEBHOOK",
+  "_provider": "Optional fallback. The runner normally writes with the provider, model and key chosen in Studio's Model settings.",
+  "provider": "",
+  "model": "",
+  "modelKeyEnv": "SC_MODEL_KEY",
+  "recipes": {}
+}
